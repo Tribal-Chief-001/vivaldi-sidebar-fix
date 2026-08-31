@@ -26,6 +26,9 @@ const requiredSignatures = [
   'tab_id',
   'wv.src = targetUrl',
   'resetWebviewToBaseUrl',
+  'chrome.tabs.update',
+  'setupCloseButton',
+  'NATIVE_CLOSE_SVG',
   'GLIDE_DELAY_MS'
 ];
 
