@@ -31,8 +31,9 @@
   ].join('');
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const discardedTabs = new Set(); // Stores tab_id of discarded panels
-  const revivingTabs = new Set();  // Atomic lock to prevent duplicate reload loops
+  const discardedTabs = new Set();      // Stores tab_id of discarded panels
+  const revivingTabs = new Set();       // Atomic lock to prevent duplicate reload loops
+  const pendingResetPanels = new Set(); // Stores panel IDs explicitly closed via the 'X' button
 
   // ── Logging ───────────────────────────────────────────────────────────────
   const LOG_PREFIX = '%c[EdgePanels]';
@@ -65,6 +66,25 @@
     if (tabIdAttr) {
       const parsed = parseInt(tabIdAttr, 10);
       if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return null;
+  }
+
+  function getPanelId(panel) {
+    if (!panel) return null;
+    // 1. Try dataset/attribute
+    const idAttr = panel.getAttribute('data-id') || panel.getAttribute('id') || panel.dataset?.id;
+    if (idAttr) return idAttr;
+
+    // 2. Try Rge props
+    const rge = getRgeComponent(panel);
+    if (rge?.props?.webPanel?.id) return rge.props.webPanel.id;
+
+    // 3. Fallback: webview tab_id or name
+    const wv = getWebview(panel);
+    if (wv) {
+      const tabId = getTabId(wv);
+      if (tabId) return `tab-${tabId}`;
     }
     return null;
   }
@@ -207,27 +227,6 @@
       }
     }
 
-    // 2. Also try clicking Vivaldi's native Home button via Fiber props
-    const header = panel.querySelector('header.webpanel-header');
-    if (header) {
-      const buttons = header.querySelectorAll('button');
-      for (const btn of buttons) {
-        for (const k of Object.keys(btn)) {
-          if (k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')) {
-            let f = btn[k];
-            while (f) {
-              if (f.memoizedProps && (f.memoizedProps.tooltip === 'Home' || f.memoizedProps.title === 'Home')) {
-                if (typeof f.memoizedProps.onClick === 'function') {
-                  try { f.memoizedProps.onClick(); } catch (_) {}
-                }
-              }
-              f = f.return;
-            }
-          }
-        }
-      }
-    }
-
     // Determine target base URL
     const configuredUrl = getPanelConfiguredUrl(panel);
     const currentSrc = wv.getAttribute('src') || wv.src || '';
@@ -237,7 +236,7 @@
 
     log('Resetting web panel (tabId:', tabId, ') to base URL:', targetUrl);
 
-    // 3. Direct Chromium tab navigation via chrome.tabs.update
+    // 2. Direct Chromium tab navigation via chrome.tabs.update
     if (tabId && targetUrl && targetUrl.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.update) {
       try {
         chrome.tabs.update(tabId, { url: targetUrl });
@@ -246,7 +245,7 @@
       }
     }
 
-    // 4. DOM Webview src navigation
+    // 3. DOM Webview src navigation
     if (targetUrl && targetUrl !== 'about:blank') {
       try {
         wv.src = targetUrl;
@@ -315,12 +314,18 @@
   }
 
   // ── Handle Edge-Style Close (Reset URL + Glide UI + Discard RAM) ───────────
+  // ONLY triggered when the user explicitly clicks the 'X' button!
   function handleEdgeClose(panel) {
-    log('Edge Close (X) action triggered');
+    log('Edge Close (X) action triggered — flagging panel for clean reset');
+
+    const panelId = getPanelId(panel);
+    if (panelId) {
+      pendingResetPanels.add(panelId);
+    }
 
     const wv = getWebview(panel);
 
-    // Step 1: Reset webview & Chromium tab to clean base URL immediately
+    // Step 1: Immediately reset webview & Chromium tab to clean base URL
     if (wv) {
       resetWebviewToBaseUrl(panel, wv);
     }
@@ -334,26 +339,21 @@
     }, GLIDE_DELAY_MS);
   }
 
-  // ── Enforce Base URL & Wakeup on Reopen ────────────────────────────────────
-  function enforceBaseUrlOnReopen(panel) {
+  // ── Handle Reopen ──────────────────────────────────────────────────────────
+  function handleReopen(panel) {
     const wv = getWebview(panel);
     if (!wv) return;
 
-    const configuredUrl = getPanelConfiguredUrl(panel);
-    const currentSrc = wv.getAttribute('src') || wv.src || '';
-    const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc);
+    const panelId = getPanelId(panel);
+    const wasExplicitlyClosed = panelId && pendingResetPanels.has(panelId);
 
-    // If panel is reopening and currently on a deep chat/session link, reset to base prompt
-    if (targetUrl && currentSrc && currentSrc !== targetUrl) {
-      // Check if currentSrc is a deeper path/query of the target
-      try {
-        const currentU = new URL(currentSrc);
-        const targetU = new URL(targetUrl);
-        if (currentU.hostname === targetU.hostname && currentU.pathname !== targetU.pathname) {
-          log('Reopened on deep session link (', currentSrc, '); redirecting to base:', targetUrl);
-          resetWebviewToBaseUrl(panel, wv);
-        }
-      } catch (_) {}
+    if (wasExplicitlyClosed) {
+      pendingResetPanels.delete(panelId);
+      log('Reopening explicitly closed panel; ensuring clean base URL state');
+      resetWebviewToBaseUrl(panel, wv);
+    } else {
+      // Panel was simply auto-hidden or toggled! Preserve existing conversation completely.
+      log('Reopening auto-hidden/toggled panel; preserving active session untouched');
     }
 
     // If tab was discarded, revive cleanly
@@ -368,11 +368,9 @@
         discardedTabs.delete(tabId);
       }
 
-      log('Reviving discarded webview (tabId:', tabId, ') ->', targetUrl || currentSrc);
+      log('Reviving discarded webview (tabId:', tabId, ')');
 
-      if (targetUrl && targetUrl !== 'about:blank') {
-        try { wv.src = targetUrl; } catch (_) {}
-      } else if (typeof wv.reload === 'function') {
+      if (typeof wv.reload === 'function') {
         try { wv.reload(); } catch (_) {}
       }
 
@@ -451,14 +449,11 @@
     if (isVisible) {
       // Panel opened / focused
       setupCloseButton(panel);
-      enforceBaseUrlOnReopen(panel);
+      handleReopen(panel);
     } else {
-      // Panel closed / hidden (via close button, panel switcher icon, shortcut, or auto-close)
-      // Reset webview immediately so subsequent reopen starts at base URL
-      const wv = getWebview(panel);
-      if (wv) {
-        resetWebviewToBaseUrl(panel, wv);
-      }
+      // Panel hidden via auto-hide or switcher click:
+      // DO NOT reset URL! DO NOT discard tab! Preserve session untouched.
+      log('Panel hidden (auto-hide or switcher toggle); session preserved.');
     }
   }
 
@@ -471,7 +466,7 @@
 
     if (panel.classList.contains('visible')) {
       setupCloseButton(panel);
-      enforceBaseUrlOnReopen(panel);
+      handleReopen(panel);
     }
   }
 
