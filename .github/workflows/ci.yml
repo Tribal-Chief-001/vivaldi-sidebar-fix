@@ -32,6 +32,7 @@ jobs:
       - name: Run Integrity & Mod Verification Tests
         run: |
           node tests/test_mod.js
+          node tests/test_edge_cases.js
 
       - name: Validate Shell Scripts
         run: |
