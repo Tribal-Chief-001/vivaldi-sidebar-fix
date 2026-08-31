@@ -69,13 +69,59 @@
     return null;
   }
 
+  // ── Rge (WebPanel Component) Resolver ────────────────────────────────────
+  // Locates Vivaldi's internal React WebPanel component instance from the DOM
+  function getRgeComponent(panel) {
+    if (!panel) return null;
+
+    // 1. Search panel DOM node's Fiber hierarchy
+    for (const key of Object.keys(panel)) {
+      if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+        let fiber = panel[key];
+        while (fiber) {
+          if (fiber.stateNode && typeof fiber.stateNode.home === 'function') {
+            return fiber.stateNode;
+          }
+          if (fiber.child && fiber.child.stateNode && typeof fiber.child.stateNode.home === 'function') {
+            return fiber.child.stateNode;
+          }
+          fiber = fiber.return;
+        }
+      }
+    }
+
+    // 2. Search webpanel header's Fiber hierarchy
+    const header = panel.querySelector('header.webpanel-header') || panel.querySelector('header');
+    if (header) {
+      for (const key of Object.keys(header)) {
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+          let fiber = header[key];
+          while (fiber) {
+            if (fiber.stateNode && typeof fiber.stateNode.home === 'function') {
+              return fiber.stateNode;
+            }
+            fiber = fiber.return;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
   // ── Base URL Resolution ───────────────────────────────────────────────────
   // Resolves the original base URL configured for this web panel (e.g. https://gemini.google.com/app)
   // so that closing the panel returns it to a fresh prompt rather than an old chat session.
   function getPanelConfiguredUrl(panel) {
     if (!panel) return null;
 
-    // 1. Try extracting webPanel.url from React Fiber / Props on panel
+    // 1. Check Rge instance directly
+    const rge = getRgeComponent(panel);
+    if (rge?.props?.webPanel?.url) {
+      return rge.props.webPanel.url;
+    }
+
+    // 2. Try extracting webPanel.url from React Fiber / Props on panel
     for (const key of Object.keys(panel)) {
       if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
         let fiber = panel[key];
@@ -96,7 +142,7 @@
       }
     }
 
-    // 2. Try extracting from webpanel header React instance
+    // 3. Try extracting from webpanel header React instance
     const header = panel.querySelector('header.webpanel-header');
     if (header) {
       for (const key of Object.keys(header)) {
@@ -146,18 +192,52 @@
 
   // ── Reset Webview to Base URL ───────────────────────────────────────────────
   function resetWebviewToBaseUrl(panel, wv) {
-    if (!panel || !wv) return;
+    if (!panel) return;
+    if (!wv) wv = getWebview(panel);
+    if (!wv) return;
+
+    // 1. First attempt: call Vivaldi's native Rge.home() method
+    const rge = getRgeComponent(panel);
+    if (rge && typeof rge.home === 'function') {
+      try {
+        log('Resetting via native Vivaldi Rge.home() method');
+        rge.home();
+      } catch (err) {
+        warn('rge.home() threw:', err);
+      }
+    }
+
+    // 2. Also try clicking Vivaldi's native Home button via Fiber props
+    const header = panel.querySelector('header.webpanel-header');
+    if (header) {
+      const buttons = header.querySelectorAll('button');
+      for (const btn of buttons) {
+        for (const k of Object.keys(btn)) {
+          if (k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')) {
+            let f = btn[k];
+            while (f) {
+              if (f.memoizedProps && (f.memoizedProps.tooltip === 'Home' || f.memoizedProps.title === 'Home')) {
+                if (typeof f.memoizedProps.onClick === 'function') {
+                  try { f.memoizedProps.onClick(); } catch (_) {}
+                }
+              }
+              f = f.return;
+            }
+          }
+        }
+      }
+    }
 
     // Determine target base URL
     const configuredUrl = getPanelConfiguredUrl(panel);
-    const currentSrc = wv.getAttribute('src') || '';
+    const currentSrc = wv.getAttribute('src') || wv.src || '';
     const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || currentSrc;
 
     const tabId = getTabId(wv);
 
     log('Resetting web panel (tabId:', tabId, ') to base URL:', targetUrl);
 
-    // 1. Authoritative Chromium tab navigation via chrome.tabs.update
+    // 3. Direct Chromium tab navigation via chrome.tabs.update
     if (tabId && targetUrl && targetUrl.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.update) {
       try {
         chrome.tabs.update(tabId, { url: targetUrl });
@@ -166,17 +246,11 @@
       }
     }
 
-    // 2. DOM Webview attribute sync
+    // 4. DOM Webview src navigation
     if (targetUrl && targetUrl !== 'about:blank') {
       try {
         wv.src = targetUrl;
       } catch (_) {}
-    }
-
-    // 3. Also trigger native Home button click if available as backup
-    const homeBtn = panel.querySelector('header.webpanel-header .ToolbarButton-Button[title="Home"], header.webpanel-header button[title="Home"]');
-    if (homeBtn && typeof homeBtn.click === 'function') {
-      try { homeBtn.click(); } catch (_) {}
     }
   }
 
@@ -211,7 +285,7 @@
     if (!wv) return;
 
     const tabId = getTabId(wv);
-    const src = wv.getAttribute('src') || '';
+    const src = wv.getAttribute('src') || wv.src || '';
 
     if (tabId && typeof chrome !== 'undefined' && chrome?.tabs?.discard) {
       chrome.tabs.discard(tabId, () => {
@@ -246,7 +320,7 @@
 
     const wv = getWebview(panel);
 
-    // Step 1: Reset webview & Chromium tab to clean base URL (new session state)
+    // Step 1: Reset webview & Chromium tab to clean base URL immediately
     if (wv) {
       resetWebviewToBaseUrl(panel, wv);
     }
@@ -260,57 +334,63 @@
     }, GLIDE_DELAY_MS);
   }
 
-  // ── Revive Discarded Panel on Reopen ───────────────────────────────────────
-  function revivePanelIfNeeded(panel) {
+  // ── Enforce Base URL & Wakeup on Reopen ────────────────────────────────────
+  function enforceBaseUrlOnReopen(panel) {
     const wv = getWebview(panel);
     if (!wv) return;
 
+    const configuredUrl = getPanelConfiguredUrl(panel);
+    const currentSrc = wv.getAttribute('src') || wv.src || '';
+    const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc);
+
+    // If panel is reopening and currently on a deep chat/session link, reset to base prompt
+    if (targetUrl && currentSrc && currentSrc !== targetUrl) {
+      // Check if currentSrc is a deeper path/query of the target
+      try {
+        const currentU = new URL(currentSrc);
+        const targetU = new URL(targetUrl);
+        if (currentU.hostname === targetU.hostname && currentU.pathname !== targetU.pathname) {
+          log('Reopened on deep session link (', currentSrc, '); redirecting to base:', targetUrl);
+          resetWebviewToBaseUrl(panel, wv);
+        }
+      } catch (_) {}
+    }
+
+    // If tab was discarded, revive cleanly
     const tabId = getTabId(wv);
     const isDiscarded = tabId && discardedTabs.has(tabId);
 
-    if (!isDiscarded) return;
+    if (isDiscarded) {
+      if (tabId && revivingTabs.has(tabId)) return;
 
-    if (tabId && revivingTabs.has(tabId)) {
-      return; // Already reviving, avoid loop
-    }
-
-    if (tabId) {
-      revivingTabs.add(tabId);
-      discardedTabs.delete(tabId);
-    }
-
-    // Determine target URL: prefer the original configured base URL so it opens clean
-    const configuredUrl = getPanelConfiguredUrl(panel);
-    const currentSrc = wv.getAttribute('src') || '';
-    const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || currentSrc;
-
-    log('Reviving discarded webview (tabId:', tabId, ') ->', targetUrl);
-
-    // Resetting wv.src forces Chromium's content layer to re-spawn
-    // the guest RenderProcessHost from scratch, avoiding dead blank webviews
-    if (targetUrl && targetUrl !== 'about:blank') {
-      try {
-        wv.src = targetUrl;
-      } catch (_) {}
-    } else if (typeof wv.reload === 'function') {
-      try { wv.reload(); } catch (_) {}
-    }
-
-    // Release lock on load completion or safety timeout
-    const cleanupLock = () => {
-      if (tabId) revivingTabs.delete(tabId);
-      wv.removeEventListener('loadstop', cleanupLock);
-      wv.removeEventListener('loadabort', cleanupLock);
-    };
-
-    wv.addEventListener('loadstop', cleanupLock);
-    wv.addEventListener('loadabort', cleanupLock);
-
-    setTimeout(() => {
-      if (tabId && revivingTabs.has(tabId)) {
-        revivingTabs.delete(tabId);
+      if (tabId) {
+        revivingTabs.add(tabId);
+        discardedTabs.delete(tabId);
       }
-    }, REVIVE_TIMEOUT_MS);
+
+      log('Reviving discarded webview (tabId:', tabId, ') ->', targetUrl || currentSrc);
+
+      if (targetUrl && targetUrl !== 'about:blank') {
+        try { wv.src = targetUrl; } catch (_) {}
+      } else if (typeof wv.reload === 'function') {
+        try { wv.reload(); } catch (_) {}
+      }
+
+      const cleanupLock = () => {
+        if (tabId) revivingTabs.delete(tabId);
+        wv.removeEventListener('loadstop', cleanupLock);
+        wv.removeEventListener('loadabort', cleanupLock);
+      };
+
+      wv.addEventListener('loadstop', cleanupLock);
+      wv.addEventListener('loadabort', cleanupLock);
+
+      setTimeout(() => {
+        if (tabId && revivingTabs.has(tabId)) {
+          revivingTabs.delete(tabId);
+        }
+      }, REVIVE_TIMEOUT_MS);
+    }
   }
 
   // ── Unify / Ensure Close Button in Header ──────────────────────────────────
@@ -369,8 +449,16 @@
     const isVisible = panel.classList.contains('visible');
 
     if (isVisible) {
+      // Panel opened / focused
       setupCloseButton(panel);
-      revivePanelIfNeeded(panel);
+      enforceBaseUrlOnReopen(panel);
+    } else {
+      // Panel closed / hidden (via close button, panel switcher icon, shortcut, or auto-close)
+      // Reset webview immediately so subsequent reopen starts at base URL
+      const wv = getWebview(panel);
+      if (wv) {
+        resetWebviewToBaseUrl(panel, wv);
+      }
     }
   }
 
@@ -383,7 +471,7 @@
 
     if (panel.classList.contains('visible')) {
       setupCloseButton(panel);
-      revivePanelIfNeeded(panel);
+      enforceBaseUrlOnReopen(panel);
     }
   }
 
