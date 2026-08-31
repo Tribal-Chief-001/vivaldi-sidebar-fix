@@ -24,7 +24,8 @@ const requiredSignatures = [
   'pointerdown',
   'pointerup',
   'tab_id',
-  'wv.src = currentSrc',
+  'wv.src = targetUrl',
+  'resetWebviewToBaseUrl',
   'GLIDE_DELAY_MS'
 ];
 
