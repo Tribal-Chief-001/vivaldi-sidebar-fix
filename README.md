@@ -31,26 +31,16 @@
 
 ```mermaid
 flowchart TD
-    subgraph UserAction["When you use your Web Panel"]
-        A[You open ChatGPT / Claude / Gemini] --> B{What do you do next?}
-    end
+    A["Open ChatGPT / Claude / Gemini"] --> B{"What action do you take?"}
 
-    subgraph MultitaskFlow["Scenario A: You click away to copy code / read article"]
-        B -->|Click Anywhere Outside| C[Auto-Hide Slide Away]
-        C --> D[Session Kept Warm in Memory]
-        D --> E[Reopen: Your Chat is Exactly Where You Left It!]
-    end
+    B -->|"Click Anywhere Outside (Multitask)"| C["Panel Slides Away"]
+    C --> D["Active Session Kept Warm in RAM"]
+    D --> E["Reopen: Chat context preserved intact!"]
 
-    subgraph CleanCloseFlow["Scenario B: You are done and click [X]"]
-        B -->|Click Dedicated [X] Button| F[Glide-Out Animation 150ms]
-        F --> G[Navigate Tab to Clean Home URL]
-        G --> H[chrome.tabs.discard: Drop RAM to 0.0 MB]
-        H --> I[Reopen: Fresh Clean Chat & Instant Revival!]
-    end
-
-    style MultitaskFlow fill:#1a233a,stroke:#3b82f6,stroke-width:2px;
-    style CleanCloseFlow fill:#122822,stroke:#10b981,stroke-width:2px;
-    style UserAction fill:#2d1a3a,stroke:#8b5cf6,stroke-width:2px;
+    B -->|"Click Dedicated (X) Close Button"| F["150ms Glide Animation"]
+    F --> G["Navigate Tab to Base URL (e.g. gemini.google.com/app)"]
+    G --> H["chrome.tabs.discard: Free RAM down to 0.0 MB"]
+    H --> I["Reopen: Fresh clean chat prompt!"]
 ```
 
 ---
