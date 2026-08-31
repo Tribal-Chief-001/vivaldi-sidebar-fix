@@ -6,11 +6,22 @@ set -euo pipefail
 
 VIVALDI_RESOURCE_DIR=""
 
-for dir in \
-    "/opt/vivaldi/resources/vivaldi" \
-    "/opt/vivaldi-snapshot/resources/vivaldi" \
-    "/usr/share/vivaldi/resources/vivaldi" \
-    "/app/vivaldi/resources/vivaldi"; do
+CANDIDATE_DIRS=(
+    # Linux standard & snapshots
+    "/opt/vivaldi/resources/vivaldi"
+    "/opt/vivaldi-snapshot/resources/vivaldi"
+    "/usr/share/vivaldi/resources/vivaldi"
+    "/usr/local/share/vivaldi/resources/vivaldi"
+    "/app/vivaldi/resources/vivaldi"
+    # macOS
+    "/Applications/Vivaldi.app/Contents/Frameworks/Vivaldi Framework.framework/Resources/vivaldi"
+    "/Applications/Vivaldi.app/Contents/Resources/vivaldi"
+    "/Applications/Vivaldi Snapshot.app/Contents/Frameworks/Vivaldi Framework.framework/Resources/vivaldi"
+    "/Applications/Vivaldi Snapshot.app/Contents/Resources/vivaldi"
+    "$HOME/Applications/Vivaldi.app/Contents/Frameworks/Vivaldi Framework.framework/Resources/vivaldi"
+)
+
+for dir in "${CANDIDATE_DIRS[@]}"; do
     if [ -d "$dir" ] && [ -f "$dir/window.html" ]; then
         VIVALDI_RESOURCE_DIR="$dir"
         break
@@ -22,8 +33,8 @@ if [ -z "$VIVALDI_RESOURCE_DIR" ]; then
     exit 1
 fi
 
-if [ "$EUID" -ne 0 ]; then
-    echo "[-] Please run as root: sudo bash uninstall.sh"
+if [ ! -w "$VIVALDI_RESOURCE_DIR" ] && [ "$EUID" -ne 0 ]; then
+    echo "[-] Please run with sudo: sudo bash uninstall.sh"
     exit 1
 fi
 
@@ -36,7 +47,8 @@ if [ -f "$VIVALDI_RESOURCE_DIR/window.html.orig" ]; then
     rm -f "$VIVALDI_RESOURCE_DIR/window.html.orig"
 else
     # Fallback: remove script tag manually
-    sed -i 's|<script src="edge-panel-mod.js"></script>||g' "$VIVALDI_RESOURCE_DIR/window.html"
+    sed -i.bak 's|<script src="edge-panel-mod.js"></script>||g' "$VIVALDI_RESOURCE_DIR/window.html"
+    rm -f "$VIVALDI_RESOURCE_DIR/window.html.bak"
 fi
 
 # 2. Remove mod JS
@@ -61,8 +73,13 @@ fi
 
 echo ""
 echo "=============================================================================="
-echo "[✓] Vivaldi restored to 100% stock clean state!"
-echo "Restart Vivaldi to apply:"
-echo "    killall vivaldi-bin vivaldi 2>/dev/null || true"
-echo "    vivaldi &"
+echo "[✓] Uninstallation complete! Vivaldi restored to 100% stock factory state."
+echo "Restart Vivaldi to apply changes:"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "    killall Vivaldi 2>/dev/null || true"
+    echo "    open -a Vivaldi"
+else
+    echo "    killall vivaldi-bin vivaldi 2>/dev/null || true"
+    echo "    vivaldi &"
+fi
 echo "=============================================================================="

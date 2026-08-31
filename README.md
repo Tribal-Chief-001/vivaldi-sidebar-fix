@@ -9,12 +9,12 @@
 [![Release: v1.0.5](https://img.shields.io/badge/Release-v1.0.5-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vivaldi: Tested](https://img.shields.io/badge/Vivaldi-7.x%20%7C%208.x-ef3939.svg)](https://vivaldi.com)
-[![Platform: Linux](https://img.shields.io/badge/Platform-Ubuntu%20%7C%20Mint%20%7C%20Debian%20%7C%20Arch%20%7C%20Fedora-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)
+[![Platform: Linux | Windows | macOS | BSD](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20BSD-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)
 [![RAM Usage: 0 MB Discard](https://img.shields.io/badge/RAM%20Reclaim-0.0%20MB%20on%20Close-brightgreen.svg)](#-memory-benchmarks-00-mb-true-ram-discard-vs-stock-vivaldi)
 
 <br/>
 
-[ELI5: In 30 Seconds](#-eli5-the-problem--the-fix-in-30-seconds) • [Key Features](#-features-microsoft-edge-sidebar-experience-for-vivaldi) • [Why Stock Fails](#-the-problem-why-stock-vivaldi-web-panels-struggle-with-heavy-ai-workflows) • [Installation Guide](#-installation-spoon-fed-distro-guide) • [Benchmarks](#-memory-benchmarks-00-mb-true-ram-discard-vs-stock-vivaldi) • [Chronological Ledger](CHANGELOG.md) • [FAQ](#-frequently-asked-questions-faq)
+[ELI5: In 30 Seconds](#-eli5-the-problem--the-fix-in-30-seconds) • [Key Features](#-features-microsoft-edge-sidebar-experience-for-vivaldi) • [Why Stock Fails](#-the-problem-why-stock-vivaldi-web-panels-struggle-with-heavy-ai-workflows) • [Installation Guide](#-installation-spoon-fed-multi-os-guide) • [Benchmarks](#-memory-benchmarks-00-mb-true-ram-discard-vs-stock-vivaldi) • [Chronological Ledger](CHANGELOG.md) • [FAQ](#-frequently-asked-questions-faq)
 
 </div>
 
@@ -74,6 +74,7 @@ Stock panels never reset on close. If you open Gemini, write a 20-message chat, 
 - 📐 **88% Full-Width Expansion**: Byte-length safe patch expands Vivaldi's width limits from 61.8% $\to$ **88%**, enabling true desktop side-by-side multitasking.
 - 🧩 **Extension Panel Isolation**: Automatically detects and protects extension side panels (Bitwarden vault, Translate) from unwanted URL resets or discards.
 - ⚡ **Zero DOM Thrashing**: Uses a scoped container MutationObserver with `subtree: false`, preventing idle CPU usage or micro-stutters during typing.
+- 🌐 **100% Cross-Platform**: Fully supported across **Linux**, **Windows**, **macOS**, and **FreeBSD**.
 - 🛡️ **APT Update Persistence**: Backed by a Debian/Ubuntu/Mint `DPkg::Post-Invoke` hook so `apt upgrade` automatically re-applies your mod.
 
 ---
@@ -91,9 +92,9 @@ Tested on Linux with 5 active web panels (Claude, Gemini, Grok, ChatGPT, Perplex
 
 ---
 
-## 🚀 Installation: Spoon-Fed Distro Guide
+## 🚀 Installation: Spoon-Fed Multi-OS Guide
 
-### Step 1: Run the 1-Line Installer
+### 🐧 Linux & FreeBSD (Ubuntu, Mint, Debian, Arch, Fedora, openSUSE)
 
 Open your terminal and run:
 
@@ -103,8 +104,7 @@ cd vivaldi-sidebar-fix
 sudo bash install.sh
 ```
 
-### Step 2: Restart Vivaldi
-
+Restart Vivaldi:
 ```bash
 killall vivaldi-bin vivaldi 2>/dev/null || true
 vivaldi &
@@ -112,14 +112,48 @@ vivaldi &
 
 ---
 
-### Distro Compatibility Matrix
+### 🪟 Windows (Windows 10 / Windows 11)
 
-| Distribution | Package Manager | Path Auto-Detected | Persistence Mechanism |
-| :--- | :--- | :--- | :--- |
-| **Linux Mint / Ubuntu / Debian** | `apt` | `/opt/vivaldi/resources/vivaldi` | `/etc/apt/apt.conf.d/99-vivaldi-mod-persistence` |
-| **Arch Linux / Manjaro / EndeavourOS** | `pacman` | `/opt/vivaldi/resources/vivaldi` | Re-run `sudo bash install.sh` after browser update |
-| **Fedora / RHEL** | `dnf` | `/opt/vivaldi/resources/vivaldi` | Re-run `sudo bash install.sh` after browser update |
-| **openSUSE (Tumbleweed / Leap)** | `zypper` | `/opt/vivaldi/resources/vivaldi` | Re-run `sudo bash install.sh` after browser update |
+Open **PowerShell** (Run as Administrator or standard user depending on where Vivaldi is installed):
+
+```powershell
+git clone https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix.git
+cd vivaldi-sidebar-fix
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install.ps1
+```
+
+*Works automatically with both Single-User (`%LOCALAPPDATA%\Vivaldi\Application\...`) and All-Users (`C:\Program Files\Vivaldi\Application\...`) installations!*
+
+Restart Vivaldi to enjoy the mod.
+
+---
+
+### 🍎 macOS (Apple Silicon M1/M2/M3 & Intel)
+
+Open **Terminal** and run:
+
+```bash
+git clone https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix.git
+cd vivaldi-sidebar-fix
+sudo bash install.sh
+```
+
+Restart Vivaldi:
+```bash
+killall Vivaldi 2>/dev/null || true
+open -a Vivaldi
+```
+
+---
+
+### 📦 Flatpak & Niche Setups
+
+| Environment | Resource Path | Installer Command |
+| :--- | :--- | :--- |
+| **Flatpak (Linux)** | `~/.var/app/com.vivaldi.Vivaldi/data/vivaldi` | `bash install.sh` |
+| **Vivaldi Snapshot (Preview)** | Auto-detected on all platforms | `sudo bash install.sh` (or `.\install.ps1`) |
+| **FreeBSD / OpenBSD** | `/usr/local/share/vivaldi/resources/vivaldi` | `sudo bash install.sh` |
 
 ---
 
@@ -127,7 +161,7 @@ vivaldi &
 
 For the authentic Microsoft Edge flyout sidebar workflow:
 
-1. Open Vivaldi Settings (`Ctrl + F12`).
+1. Open Vivaldi Settings (`Ctrl + F12` on Windows/Linux, `Cmd + ,` on macOS).
 2. Go to **Panel** $\to$ **Panel Options**:
    - ✅ Check **Floating Panel**
    - ✅ Check **Auto-close Inactive Panel**
@@ -169,8 +203,11 @@ if (isDiscarded && !revivingTabs.has(tabId)) {
 
 ## ❓ Frequently Asked Questions (FAQ)
 
+### Does this work on Windows and Mac?
+**Yes!** Vivaldi is built on the same Chromium + React core across Windows, macOS, Linux, and FreeBSD. The exact same JavaScript mod (`edge-panel-mod.js`) and bundle patches run identically on every operating system. We provide `install.ps1` for Windows, `install.sh` for Linux/macOS/BSD, and `patch-bundle.py` that auto-detects all OS paths.
+
 ### How do I get an Edge-like auto-hiding sidebar in Vivaldi?
-Go to Vivaldi Settings (`Ctrl + F12`) $\to$ **Panel** $\to$ **Panel Options**, and check both **Floating Panel** and **Auto-close Inactive Panel**. With this mod installed, panels slide out smoothly over your active tab, auto-hide when clicking away, and release memory on close.
+Go to Vivaldi Settings $\to$ **Panel** $\to$ **Panel Options**, and check both **Floating Panel** and **Auto-close Inactive Panel**. With this mod installed, panels slide out smoothly over your active tab, auto-hide when clicking away, and release memory on close.
 
 ### Why does Vivaldi hide the close button on floating panels?
 In Vivaldi's React bundle (`bundle.js`), the `shouldShowCloseButton` property hides the close button whenever floating overlay and auto-close are enabled. This mod patches `bundle.js` cleanly and injects the native close button into the web panel header.
@@ -178,18 +215,26 @@ In Vivaldi's React bundle (`bundle.js`), the `shouldShowCloseButton` property hi
 ### Does clicking away or multitasking reset my active chat session?
 **No!** If you click away to copy code or read a webpage, the panel slides away while keeping your conversation and form state warm and alive. The clean base URL reset and RAM discard only happen when you explicitly click the **(X) Close** button.
 
-### Will system updates (`apt upgrade`) overwrite this mod?
-On Debian, Ubuntu, and Linux Mint, `install.sh` automatically installs an APT hook (`/etc/apt/apt.conf.d/99-vivaldi-mod-persistence`) that re-applies the mod seamlessly whenever Vivaldi is upgraded. On Arch or Fedora, simply re-run `sudo bash install.sh`.
+### Will system updates overwrite this mod?
+- **Linux (Debian/Ubuntu/Mint)**: `install.sh` automatically configures `/etc/apt/apt.conf.d/99-vivaldi-mod-persistence` so `apt upgrade` re-applies it automatically.
+- **Windows / macOS / Arch / Fedora**: Whenever Vivaldi updates to a new major version, simply run `.\install.ps1` (Windows) or `sudo bash install.sh` (Mac/Linux).
 
 ---
 
 ## 🔄 Uninstallation / Factory Stock Rollback
 
-To restore Vivaldi to 100% factory original state:
+To restore Vivaldi to 100% factory original state on any platform:
 
+### On Linux & macOS:
 ```bash
 cd vivaldi-sidebar-fix
 sudo bash uninstall.sh
+```
+
+### On Windows:
+```powershell
+cd vivaldi-sidebar-fix
+.\uninstall.ps1
 ```
 
 This restores `window.html` and `bundle.js` from pristine `.orig` backups, deletes all mod files, and removes any persistence hooks.

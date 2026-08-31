@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Vivaldi bundle.js Patcher:
+Vivaldi bundle.js Patcher (Cross-Platform: Linux, macOS, Windows, FreeBSD):
 1. Expands maximum panel width drag limit from Golden Ratio (0.618 / 61.8%) to 0.880 (88%).
 2. Expands container max-width CSS from 65vw to 88vw.
 3. Preserves exact byte lengths to maintain source-map and runtime alignment.
@@ -8,17 +8,48 @@ Vivaldi bundle.js Patcher:
 
 import os
 import sys
+import glob
 import shutil
 
 CANDIDATE_PATHS = [
+    # Linux / BSD / Flatpak
     "/opt/vivaldi/resources/vivaldi/bundle.js",
     "/opt/vivaldi-snapshot/resources/vivaldi/bundle.js",
+    "/usr/share/vivaldi/resources/vivaldi/bundle.js",
+    "/usr/local/share/vivaldi/resources/vivaldi/bundle.js",
+    "/app/vivaldi/resources/vivaldi/bundle.js",
+    # macOS
+    "/Applications/Vivaldi.app/Contents/Frameworks/Vivaldi Framework.framework/Resources/vivaldi/bundle.js",
+    "/Applications/Vivaldi.app/Contents/Resources/vivaldi/bundle.js",
+    "/Applications/Vivaldi Snapshot.app/Contents/Frameworks/Vivaldi Framework.framework/Resources/vivaldi/bundle.js",
+    "/Applications/Vivaldi Snapshot.app/Contents/Resources/vivaldi/bundle.js",
 ]
 
 def find_bundle_path():
+    # 1. Check fixed Unix / macOS paths
     for p in CANDIDATE_PATHS:
         if os.path.isfile(p):
             return p
+
+    # 2. Check Windows paths (User & System installs)
+    win_roots = []
+    for env_var in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"]:
+        val = os.environ.get(env_var)
+        if val:
+            win_roots.append(val)
+
+    for root in win_roots:
+        patterns = [
+            os.path.join(root, "Vivaldi", "Application", "*", "resources", "vivaldi", "bundle.js"),
+            os.path.join(root, "Vivaldi Snapshot", "Application", "*", "resources", "vivaldi", "bundle.js"),
+        ]
+        for pat in patterns:
+            matches = glob.glob(pat)
+            if matches:
+                # Return highest version match if multiple versions exist
+                matches.sort(reverse=True)
+                return matches[0]
+
     return None
 
 def patch_bundle(bundle_path):
@@ -91,7 +122,7 @@ def main():
 
     if not target:
         print("Error: Could not locate Vivaldi bundle.js automatically.")
-        print("Usage: sudo python3 patch-bundle.py [path_to_bundle.js]")
+        print("Usage: python3 patch-bundle.py [path_to_bundle.js]")
         sys.exit(1)
 
     success = patch_bundle(target)
