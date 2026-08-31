@@ -1,0 +1,19 @@
+# Node / dependencies
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.orig
+
+# Logs & temp
+*.log
+.tmp/
