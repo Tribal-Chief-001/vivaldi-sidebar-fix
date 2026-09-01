@@ -19,6 +19,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.0.6** | Web Panel Shortcut & Submit Fix | `Ctrl+Enter` / `Meta+Enter` failed in Twitter, Claude, ChatGPT | Vivaldi `bundle.js` shortcut hijacking + web panel focus blindspot | Patched passthrough set `f`, patched `handleShortcut` for `#panels`, added capture guard |
 | **v1.0.7** | Universal Web Panel Close & Reset | Close button only hid Twitter, Claude, Reddit, etc.; only Gemini reset | Native `Rge` close bypassed `home()`, fallback preserved subpaths | Hooked native `Rge` close button, universal `origin + '/'` reset, global capture listener |
 | **v1.0.8** | Dual-Key Reset & Clean Native Shortcuts | Some custom panels lost base URL on reopen; window capture blocked Shift+Enter | Panel ID mismatch between close and reopen; window `stopImmediatePropagation` blocked native input | Dual-key tracking (`panelId` + `tabId`) with `panelResetUrls` map; removed window capture listener in favor of pure bundle patch |
+| **v1.0.9** | Native Reopen `this.home()` Lifecycle | Opening deep articles (e.g. artificialanalysis.ai, Grok) reopened old article | Tab discard killed navigation mid-flight; on restore Chromium loaded old committed URL | Patched React `componentDidUpdate` in `Rge` to execute `this.home()` directly on reopen |
 
 ---
 
@@ -151,6 +152,24 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 
 ---
 
+### Iteration 10 (v1.0.9): Native `componentDidUpdate` Home Reset Bridge
+* **The Goal**: Eliminate the navigation-vs-discard race condition entirely for heavy web panels with deep sub-articles (e.g. `artificialanalysis.ai`, Grok, ChatGPT).
+* **What Broke**:
+  - The user browsed deep articles in `artificialanalysis.ai` or Grok, and closed with `(X)`. Upon reopening, Chromium still restored the old article instead of the initial homepage.
+* **Why It Happened (The Autopsy)**:
+  - When closing a panel, if we navigate the webview right before `chrome.tabs.discard` kills the renderer, Chromium destroys the guest process **before the network fetch for the homepage commits**.
+  - When the panel is reopened later, Chromium’s Session Restore re-spawns the tab using the *last committed URL in the session store*—which was the old article!
+* **The Engineering Fix**:
+  - Instead of attempting network navigation mid-teardown, clicking `(X)` flags the panel in `closedPanelsForReset`.
+  - Patched Vivaldi's React `componentDidUpdate` in `bundle.js` directly:
+    ```javascript
+    (!e.isVisible && this.props.isVisible && window.__edgeShouldReset?.(this.props.webPanel?.id) && this.home())
+    ```
+  - When the panel becomes visible on reopen, React immediately triggers Vivaldi's native `this.home()`!
+  - `this.home()` executes `this.refWebpanelwebview.current.src = this.props.webPanel.url` (the exact URL you added when creating the panel), cleanly spawning the guest process and loading the homepage live in front of the user with zero race conditions.
+
+---
+
 ## 🏆 Current Architecture Summary
 
 ```
@@ -176,15 +195,15 @@ Press [Ctrl + Enter] / [Shift + Enter] / [Enter]
 
 User Action: Click Dedicated [X] Button (Any Web Panel in Vivaldi)
        │
-       ├─► 1. Rge native bridge triggers this.home() + __edgeCloseWebPanel
-       ├─► 2. Dual-key index (panelId + tabId) recorded in panelResetUrls
-       ├─► 3. Navigate tab to exact initial configured URL (chrome.tabs.update)
-       ├─► 4. Slide panel closed (150ms glide animation)
-       └─► 5. Discard guest renderer process down to 0.0 MB RAM
+       ├─► 1. Record panel ID in closedPanelsForReset
+       ├─► 2. Slide panel closed (150ms glide animation)
+       └─► 3. Discard guest renderer process down to 0.0 MB RAM
                │
                ▼
 User Reopens Panel Later:
        │
-       ├─► Dual-key lookup in panelResetUrls -> Enforce clean base URL
-       └─► Atomically revive GuestView renderer without blank screen or reload loops
+       ├─► React componentDidUpdate detects reopen transition: !e.isVisible && this.props.isVisible
+       ├─► Queries window.__edgeShouldReset(this.props.webPanel.id) -> TRUE
+       ├─► Executes native this.home(): wv.src = this.props.webPanel.url
+       └─► Respawns GuestView renderer and loads exact initial added homepage!
 ```

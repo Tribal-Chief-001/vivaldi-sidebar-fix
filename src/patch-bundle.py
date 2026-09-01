@@ -12,6 +12,7 @@ Vivaldi bundle.js Patcher (Cross-Platform: Linux, macOS, Windows, FreeBSD):
      being swallowed by Vivaldi's browser command dispatcher.
    - Fixes Web Panel webview focus blindspot in handleShortcut so typing inside web panels
      is never treated as an unfocused background tab.
+6. Connects Rge componentDidUpdate to trigger native this.home() on reopen when closed via (X).
 """
 
 import os
@@ -140,6 +141,16 @@ def patch_bundle(bundle_path):
         changes += 1
     elif 'p?.closest?.("#panels")?S(r)&&v(e,h,O(r),t)' in content:
         print(" -> Web panel webview shortcut dispatcher already patched")
+
+    # 7. Patch Rge componentDidUpdate to trigger this.home() on reopen when flagged by Close (X)
+    target_cdu = 'e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
+    new_cdu = '(!e.isVisible&&this.props.isVisible&&window.__edgeShouldReset?.(this.props.webPanel?.id)&&this.home()),e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
+    if target_cdu in content:
+        content = content.replace(target_cdu, new_cdu, 1)
+        print(" -> Patched Rge componentDidUpdate for instant home reset on reopen")
+        changes += 1
+    elif '__edgeShouldReset' in content:
+        print(" -> Rge componentDidUpdate already patched for home reset")
 
     if changes > 0:
         with open(bundle_path, "w", encoding="utf-8") as f:
