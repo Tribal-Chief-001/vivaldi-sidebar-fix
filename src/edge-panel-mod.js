@@ -1,5 +1,5 @@
 // =============================================================================
-// Edge-Style Close & Discard for Vivaldi Web Panels (Native Home Hook Edition)
+// Edge-Style Close & Discard for Vivaldi Web Panels (Universal Home Edition)
 // =============================================================================
 //
 // Description:
@@ -14,12 +14,12 @@
 //     2. Universal Clean Initial URL Reset via Native this.home():
 //        Clicking the dedicated 'X' button flags the panel so that upon reopen,
 //        Vivaldi's native this.home() triggers directly, loading this.props.webPanel.url
-//        (the exact URL you added when creating the panel).
+//        (the exact URL you added when creating the panel) across ALL websites without exception.
 //     3. 0.0 MB RAM Discard:
 //        After an off-screen glide delay (150ms), discards the guest renderer process
 //        down to 0.0 MB RAM via chrome.tabs.discard().
 //     4. Resilient Atomic Wakeup:
-//        Wakes up the discarded webview cleanly on reopen via home URL reassignment,
+//        Wakes up the discarded webview cleanly on reopen via home URL assignment,
 //        preventing old article/chat overwrite, blank screens, or reload loops.
 //     5. Native Keyboard Shortcut Passthrough:
 //        Handled natively in bundle.js via text passthrough set (f) and handleShortcut,
@@ -51,6 +51,7 @@
   const discardedTabs = new Set();        // Stores tab_id of discarded panels
   const revivingTabs = new Set();         // Atomic lock to prevent duplicate reload loops
   const closedPanelsForReset = new Set(); // Stores panel IDs flagged for native home() reset
+  const recentlyResetPanels = new Set();  // Prevents DOM MutationObserver race conditions
 
   // ── React Bridge: Reopen Home Reset Signal ────────────────────────────────
   // Queried by Rge.componentDidUpdate in bundle.js when panel becomes visible
@@ -58,6 +59,8 @@
     if (!panelId) return false;
     if (closedPanelsForReset.has(panelId)) {
       closedPanelsForReset.delete(panelId);
+      recentlyResetPanels.add(panelId);
+      setTimeout(() => recentlyResetPanels.delete(panelId), 3000);
       log('Native Rge home() reset triggered for panel:', panelId);
       return true;
     }
@@ -70,6 +73,7 @@
       discardedTabs.delete(closedTabId);
       revivingTabs.delete(closedTabId);
       closedPanelsForReset.delete(`tab-${closedTabId}`);
+      recentlyResetPanels.delete(`tab-${closedTabId}`);
     });
   }
 
@@ -454,16 +458,22 @@
     const tabId = getTabId(wv);
 
     const wasExplicitlyClosed = Boolean(
-      (panelId && closedPanelsForReset.has(panelId)) ||
-      (tabId && closedPanelsForReset.has(`tab-${tabId}`))
+      (panelId && (closedPanelsForReset.has(panelId) || recentlyResetPanels.has(panelId))) ||
+      (tabId && (closedPanelsForReset.has(`tab-${tabId}`) || recentlyResetPanels.has(`tab-${tabId}`)))
     );
 
     const rge = getRgeComponent(panel);
     const configuredHomeUrl = rge?.props?.webPanel?.url || getPanelConfiguredUrl(panel);
 
     if (wasExplicitlyClosed) {
-      if (panelId) closedPanelsForReset.delete(panelId);
-      if (tabId) closedPanelsForReset.delete(`tab-${tabId}`);
+      if (panelId) {
+        closedPanelsForReset.delete(panelId);
+        recentlyResetPanels.delete(panelId);
+      }
+      if (tabId) {
+        closedPanelsForReset.delete(`tab-${tabId}`);
+        recentlyResetPanels.delete(`tab-${tabId}`);
+      }
 
       log('Reopening explicitly closed panel; enforcing native home reset');
 
@@ -477,9 +487,10 @@
       if (targetHomeUrl && targetHomeUrl.startsWith('http')) {
         wv.src = targetHomeUrl;
       }
+      return; // Handled completely; do not touch currentSrc below
     }
 
-    // Revive discarded webview
+    // Revive discarded webview for auto-hidden panels (multitasking)
     const isDiscarded = tabId && discardedTabs.has(tabId);
     if (isDiscarded) {
       if (tabId && revivingTabs.has(tabId)) return;
@@ -489,16 +500,13 @@
         discardedTabs.delete(tabId);
       }
 
-      log('Reviving discarded webview (tabId:', tabId, ')');
+      log('Reviving auto-hidden discarded webview (tabId:', tabId, ')');
 
-      // If NOT explicitly closed, revive using currentSrc to preserve active session
-      if (!wasExplicitlyClosed) {
-        const currentSrc = wv.src || wv.getAttribute('src');
-        if (currentSrc) {
-          wv.src = currentSrc;
-        } else if (typeof wv.reload === 'function') {
-          try { wv.reload(); } catch (_) {}
-        }
+      const currentSrc = wv.src || wv.getAttribute('src');
+      if (currentSrc) {
+        wv.src = currentSrc;
+      } else if (typeof wv.reload === 'function') {
+        try { wv.reload(); } catch (_) {}
       }
 
       const cleanupLock = () => {
