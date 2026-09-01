@@ -6,7 +6,7 @@
 *Instant 0.0 MB RAM discard, restored manual close button, 88% full-width expansion, clean base URL reset on close, Twitter/X & AI submit shortcut passthrough (Ctrl+Enter), and glitch-free wakeups.*
 
 [![CI & Integrity Checks](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml/badge.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml)
-[![Release: v1.0.6](https://img.shields.io/badge/Release-v1.0.9-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
+[![Release: v1.0.6](https://img.shields.io/badge/Release-v1.1.1-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vivaldi: Tested](https://img.shields.io/badge/Vivaldi-7.x%20%7C%208.x-ef3939.svg)](https://vivaldi.com)
 [![Platform: Linux | Windows | macOS | BSD](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20BSD-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)
@@ -165,6 +165,23 @@ open -a Vivaldi
 | **Flatpak (Linux)** | `~/.var/app/com.vivaldi.Vivaldi/data/vivaldi` | `bash install.sh` |
 | **Vivaldi Snapshot (Preview)** | Auto-detected on all platforms | `sudo bash install.sh` (or `.\install.ps1`) |
 | **FreeBSD / OpenBSD** | `/usr/local/share/vivaldi/resources/vivaldi` | `sudo bash install.sh` |
+
+---
+
+## 💡 Important Note: Adding & Configuring Web Panel Home URLs
+
+> [!IMPORTANT]
+> **Ensure Your Web Panels Use Clean Home URLs!**
+> When adding a Web Panel in Vivaldi (e.g. ChatGPT, NotebookLM, Claude, Twitter/X, Artificial Analysis, Grok, GitHub, Reddit, or any custom dashboard), always enter the **clean homepage / base URL** (e.g., `https://chatgpt.com/`, `https://notebooklm.google.com/`, `https://artificialanalysis.ai/`, `https://claude.ai/new`).
+>
+> - **Why this matters**: When you add a web panel while currently viewing a deep article or specific chat thread (e.g., `https://artificialanalysis.ai/models/some-article` or `https://chatgpt.com/c/xxx`), Vivaldi permanently registers that subpath as the panel's default Home URL!
+> - **How to verify/fix existing panels in 5 seconds**:
+>   1. Right-click the web panel icon on your sidebar.
+>   2. Click **Edit Web Panel**.
+>   3. Ensure the **Webpage Address** field contains the clean root URL (e.g., `https://notebooklm.google.com/` or `https://artificialanalysis.ai/`).
+>   4. Click **Save** (or remove and re-add via the **`+`** icon on the sidebar).
+>
+> Once configured with the base URL, you can browse as deep into articles, links, and chat threads as you like—clicking **(X)** will always cleanly reset straight back to that clean home URL!
 
 ---
 
