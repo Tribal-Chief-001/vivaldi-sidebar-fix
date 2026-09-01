@@ -13,14 +13,14 @@
 //        preserving the active session, form state, and article/chat history untouched.
 //     2. Universal Clean Initial URL Reset via Native this.home():
 //        Clicking the dedicated 'X' button flags the panel so that upon reopen,
-//        Vivaldi's native this.home() triggers directly from componentDidUpdate,
-//        loading this.props.webPanel.url (the exact URL you added when creating the panel).
+//        Vivaldi's native this.home() triggers directly, loading this.props.webPanel.url
+//        (the exact URL you added when creating the panel).
 //     3. 0.0 MB RAM Discard:
 //        After an off-screen glide delay (150ms), discards the guest renderer process
 //        down to 0.0 MB RAM via chrome.tabs.discard().
 //     4. Resilient Atomic Wakeup:
-//        Wakes up the discarded webview cleanly on reopen via source-reassignment,
-//        preventing blank black screens, zombie processes, or infinite reload loops.
+//        Wakes up the discarded webview cleanly on reopen via home URL reassignment,
+//        preventing old article/chat overwrite, blank screens, or reload loops.
 //     5. Native Keyboard Shortcut Passthrough:
 //        Handled natively in bundle.js via text passthrough set (f) and handleShortcut,
 //        ensuring Ctrl+Enter, Shift+Enter, and hotkeys work seamlessly with zero event blocking.
@@ -458,11 +458,25 @@
       (tabId && closedPanelsForReset.has(`tab-${tabId}`))
     );
 
+    const rge = getRgeComponent(panel);
+    const configuredHomeUrl = rge?.props?.webPanel?.url || getPanelConfiguredUrl(panel);
+
     if (wasExplicitlyClosed) {
       if (panelId) closedPanelsForReset.delete(panelId);
       if (tabId) closedPanelsForReset.delete(`tab-${tabId}`);
 
-      resetWebviewToBaseUrl(panel, wv);
+      log('Reopening explicitly closed panel; enforcing native home reset');
+
+      if (rge && typeof rge.home === 'function') {
+        try { rge.home(); } catch (_) {}
+      }
+
+      const currentSrc = wv.src || wv.getAttribute('src') || '';
+      const targetHomeUrl = configuredHomeUrl || getCleanBaseUrlFallback(currentSrc) || (currentSrc && currentSrc.startsWith('http') ? new URL(currentSrc).origin + '/' : currentSrc);
+
+      if (targetHomeUrl && targetHomeUrl.startsWith('http')) {
+        wv.src = targetHomeUrl;
+      }
     }
 
     // Revive discarded webview
@@ -477,11 +491,14 @@
 
       log('Reviving discarded webview (tabId:', tabId, ')');
 
-      const currentSrc = wv.src || wv.getAttribute('src');
-      if (currentSrc) {
-        wv.src = currentSrc;
-      } else if (typeof wv.reload === 'function') {
-        try { wv.reload(); } catch (_) {}
+      // If NOT explicitly closed, revive using currentSrc to preserve active session
+      if (!wasExplicitlyClosed) {
+        const currentSrc = wv.src || wv.getAttribute('src');
+        if (currentSrc) {
+          wv.src = currentSrc;
+        } else if (typeof wv.reload === 'function') {
+          try { wv.reload(); } catch (_) {}
+        }
       }
 
       const cleanupLock = () => {
