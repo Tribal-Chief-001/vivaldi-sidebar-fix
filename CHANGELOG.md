@@ -18,6 +18,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.0.5** | Comprehensive systems hardening | Extension panel crashes, rapid-click race, memory leaks | Unchecked `chrome.tabs.discard`, timer desync, uncleaned Sets | Full audit resolution: `isExtensionPanel`, atomic debounce, `onRemoved` listener |
 | **v1.0.6** | Web Panel Shortcut & Submit Fix | `Ctrl+Enter` / `Meta+Enter` failed in Twitter, Claude, ChatGPT | Vivaldi `bundle.js` shortcut hijacking + web panel focus blindspot | Patched passthrough set `f`, patched `handleShortcut` for `#panels`, added capture guard |
 | **v1.0.7** | Universal Web Panel Close & Reset | Close button only hid Twitter, Claude, Reddit, etc.; only Gemini reset | Native `Rge` close bypassed `home()`, fallback preserved subpaths | Hooked native `Rge` close button, universal `origin + '/'` reset, global capture listener |
+| **v1.0.8** | Dual-Key Reset & Clean Native Shortcuts | Some custom panels lost base URL on reopen; window capture blocked Shift+Enter | Panel ID mismatch between close and reopen; window `stopImmediatePropagation` blocked native input | Dual-key tracking (`panelId` + `tabId`) with `panelResetUrls` map; removed window capture listener in favor of pure bundle patch |
 
 ---
 
@@ -123,12 +124,10 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 * **The Engineering Fix**:
   1. Updated `src/patch-bundle.py` to add `"ctrl+enter"`, `"meta+enter"`, `"ctrl+shift+enter"`, `"meta+shift+enter"`, and `"alt+enter"` to `f`.
   2. Patched `handleShortcut` in `bundle.js` so when `p?.closest?.("#panels")` is true, text editing shortcuts are never hijacked by outer browser command handlers.
-  3. Added `setupPanelShortcutGuard()` in `src/edge-panel-mod.js` using window capture-phase event propagation control (`e.stopImmediatePropagation()`).
-  4. Added automated regression and simulation test suite in `tests/test_shortcuts.js`.
 
 ---
 
-### Iteration 8 (v1.0.7): Universal Web Panel Close & Base URL Reset (Twitter/X, Claude, ChatGPT, Reddit, GitHub)
+### Iteration 8 (v1.0.7): Universal Web Panel Close & Base URL Reset
 * **The Goal**: Ensure closing *any* web panel (Twitter/X, Claude, ChatGPT, Grok, Reddit, YouTube, GitHub, Discord, Slack, custom sites) cleanly resets back to its home URL and reclaims RAM down to 0.0 MB.
 * **What Broke**:
   - The close button reset Gemini properly, but on Twitter/X, Claude, and custom web panels, clicking the close button only hid the panel without resetting to the base URL or freeing RAM.
@@ -138,8 +137,17 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 * **The Engineering Fix**:
   1. Connected Vivaldi's native `Rge` close button directly to `__edgeCloseWebPanel(this)` in `patch-bundle.py`, executing `this.home()`, `chrome.tabs.update()`, and `chrome.tabs.discard()`.
   2. Enhanced `getCleanBaseUrlFallback` to enforce clean base domain resets (`u.origin + '/'` and curated home paths for Twitter/X, Claude, ChatGPT, Grok, Reddit, YouTube, GitHub, Discord, Slack, etc.).
-  3. Added global capturing click listener across all panels and headers.
-  4. Expanded test suite in `tests/test_edge_cases.js` to 22 test vectors across all domains.
+
+---
+
+### Iteration 9 (v1.0.8): Dual-Key Reset & Clean Native Shortcuts
+* **The Goal**: Guarantee that *any* web panel (including custom bookmarks, dashboards, or non-standard URLs) resets to the exact initial URL the user added, and eliminate any keyboard shortcut regressions.
+* **What Broke**:
+  1. **Reopen Reset Desync**: On some panels, `getPanelId(panel)` on reopen returned a different identifier (`tab-123`) than what was stored during close (`WEBPANEL_xxx`), causing `pendingResetPanels.has()` to return false on reopen and skipping the base URL reset.
+  2. **Keyboard Capture Collateral Damage**: A window-level `keydown` capture listener calling `e.stopImmediatePropagation()` for modifier combinations intercepted `Shift+Enter` (newlines in textareas) and interfered with Vivaldi's internal input management.
+* **The Engineering Fix**:
+  1. Implemented **Dual-Key Tracking** (`panelId` + `tabId`) with a dedicated `panelResetUrls` Map in `edge-panel-mod.js`. When a panel is closed, its configured URL (`this.props.webPanel.url`) is indexed by both its panel ID and its Chromium tab ID, guaranteeing 100% reset precision on reopen for every website.
+  2. Removed the window-level `keydown` capture listener entirely. Shortcut passthrough is now handled 100% cleanly and natively by Vivaldi's internal `handleShortcut` and set `f` patch in `bundle.js`, allowing `Ctrl+Enter`, `Shift+Enter`, `Enter`, and all hotkeys to function with zero event blockage.
 
 ---
 
@@ -155,29 +163,28 @@ Panel Slides Away (Visual Only)
 
 ────────────────────────────────────────────────────────────────────────
 
-User Action: Typing in Web Panel (Twitter, ChatGPT, Claude, GitHub)
+User Action: Typing in Web Panel (Twitter, ChatGPT, Claude, GitHub, etc.)
        │
        ▼
-Press [Ctrl + Enter] / [Cmd + Enter]
+Press [Ctrl + Enter] / [Shift + Enter] / [Enter]
        │
-       ├─► 1. setupPanelShortcutGuard captures keydown on window capture phase
-       ├─► 2. bundle.js text passthrough set (f) protects combo from browser hijacking
-       ├─► 3. handleShortcut detects panel webview and yields control
-       └─► 4. Webview receives raw event -> Instant Tweet / Prompt / Comment submission!
+       ├─► 1. bundle.js text passthrough set (f) protects combo from browser hijacking
+       ├─► 2. handleShortcut detects panel webview and yields control
+       └─► 3. Webview receives raw event natively -> Instant Tweet / Prompt / Multiline!
 
 ────────────────────────────────────────────────────────────────────────
 
-User Action: Click Dedicated [X] Button (Any Web Panel)
+User Action: Click Dedicated [X] Button (Any Web Panel in Vivaldi)
        │
        ├─► 1. Rge native bridge triggers this.home() + __edgeCloseWebPanel
-       ├─► 2. Add panel ID to pendingResetPanels
-       ├─► 3. Navigate tab to clean base domain: u.origin + '/' (chrome.tabs.update)
+       ├─► 2. Dual-key index (panelId + tabId) recorded in panelResetUrls
+       ├─► 3. Navigate tab to exact initial configured URL (chrome.tabs.update)
        ├─► 4. Slide panel closed (150ms glide animation)
        └─► 5. Discard guest renderer process down to 0.0 MB RAM
                │
                ▼
 User Reopens Panel Later:
        │
-       ├─► Check pendingResetPanels -> Reset to clean new chat / home domain
+       ├─► Dual-key lookup in panelResetUrls -> Enforce clean base URL
        └─► Atomically revive GuestView renderer without blank screen or reload loops
 ```

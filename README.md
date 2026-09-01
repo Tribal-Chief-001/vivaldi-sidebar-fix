@@ -6,7 +6,7 @@
 *Instant 0.0 MB RAM discard, restored manual close button, 88% full-width expansion, clean base URL reset on close, Twitter/X & AI submit shortcut passthrough (Ctrl+Enter), and glitch-free wakeups.*
 
 [![CI & Integrity Checks](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml/badge.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml)
-[![Release: v1.0.6](https://img.shields.io/badge/Release-v1.0.7-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
+[![Release: v1.0.6](https://img.shields.io/badge/Release-v1.0.8-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vivaldi: Tested](https://img.shields.io/badge/Vivaldi-7.x%20%7C%208.x-ef3939.svg)](https://vivaldi.com)
 [![Platform: Linux | Windows | macOS | BSD](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20BSD-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)

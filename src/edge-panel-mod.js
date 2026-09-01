@@ -1,5 +1,5 @@
 // =============================================================================
-// Edge-Style Close & Discard for Vivaldi Web Panels (Hardened Production Edition)
+// Edge-Style Close & Discard for Vivaldi Web Panels (Universal Edition)
 // =============================================================================
 //
 // Description:
@@ -11,23 +11,25 @@
 //     1. Preserves Warm Sessions on Auto-Hide / Toggle:
 //        Clicking outside or toggling the panel icon simply hides the panel while
 //        preserving the active session, form state, and chat history untouched.
-//     2. Clean Base URL Reset on Explicit (X) Click:
-//        Clicking the dedicated 'X' button resets the panel to its clean base URL
-//        (e.g. https://gemini.google.com/app, https://x.com/, https://claude.ai/new)
-//        via native Rge.home(), chrome.tabs.update(), and webview navigation.
+//     2. Universal Clean Base URL Reset on Explicit (X) Click:
+//        Clicking the dedicated 'X' button on ANY web panel resets the panel back to
+//        its initial configured URL (e.g. https://gemini.google.com/app, https://x.com/,
+//        https://claude.ai/new, or whatever URL the user added) via native Rge.home(),
+//        chrome.tabs.update(), and webview navigation.
 //     3. 0.0 MB RAM Discard:
 //        After an off-screen glide delay (150ms), discards the guest renderer process
 //        down to 0.0 MB RAM via chrome.tabs.discard().
 //     4. Resilient Atomic Wakeup:
 //        Wakes up the discarded webview cleanly on reopen via source-reassignment,
 //        preventing blank black screens, zombie processes, or infinite reload loops.
-//     5. Instant Submit Shortcut Passthrough:
-//        Protects Ctrl+Enter / Cmd+Enter inside web panels (Twitter/X, ChatGPT, Claude)
-//        from being intercepted by Vivaldi's outer action dispatcher.
+//     5. Native Keyboard Shortcut Passthrough:
+//        Handled natively in bundle.js via text passthrough set (f) and handleShortcut,
+//        ensuring Ctrl+Enter, Shift+Enter, and hotkeys work seamlessly with zero event blocking.
 //     6. Edge-Case Hardening:
 //        - Protects extension panels (Bitwarden, Translate) from discard or URL resets.
 //        - Guards against internal schemes (chrome://, vivaldi://, file://).
 //        - Atomic debounce prevents rapid-click oscillation and duplicate discards.
+//        - Dual-key tracking (panelId + tabId) ensures 100% reliable reset on reopen.
 //        - Tab removal listener cleans state Sets, preventing memory leaks.
 //        - Multi-tier close fallback works even if the sidebar switcher is hidden.
 //        - Scoped MutationObserver prevents full document.body DOM thrashing.
@@ -48,15 +50,18 @@
   ].join('');
 
   // ── State Tracking & Leak Prevention ──────────────────────────────────────
-  const discardedTabs = new Set();      // Stores tab_id of discarded panels
-  const revivingTabs = new Set();       // Atomic lock to prevent duplicate reload loops
-  const pendingResetPanels = new Set(); // Stores panel IDs explicitly closed via the 'X' button
+  const discardedTabs = new Set();       // Stores tab_id of discarded panels
+  const revivingTabs = new Set();        // Atomic lock to prevent duplicate reload loops
+  const pendingResetPanels = new Set();  // Stores panel IDs & tab keys explicitly closed via 'X'
+  const panelResetUrls = new Map();      // Stores target base URLs for panels pending reopen
 
   // Evict closed tabs from memory tracking when destroyed in Chromium
   if (typeof chrome !== 'undefined' && chrome?.tabs?.onRemoved) {
     chrome.tabs.onRemoved.addListener((closedTabId) => {
       discardedTabs.delete(closedTabId);
       revivingTabs.delete(closedTabId);
+      pendingResetPanels.delete(`tab-${closedTabId}`);
+      panelResetUrls.delete(`tab-${closedTabId}`);
     });
   }
 
@@ -75,7 +80,7 @@
   }
 
   function getWebview(panel) {
-    if (!panel) return null;
+    if (!panel) return document.querySelector('#panels webview');
     return panel.querySelector('webview') || document.querySelector('#panels webview');
   }
 
@@ -90,7 +95,7 @@
     if (!panel) return null;
     // 1. Try DOM attributes
     const idAttr = panel.getAttribute('data-id') || panel.getAttribute('id') || panel.dataset?.id;
-    if (idAttr) return idAttr;
+    if (idAttr && idAttr !== 'panels') return idAttr;
 
     // 2. Try Rge props
     const rge = getRgeComponent(panel);
@@ -120,7 +125,7 @@
 
     const panelId = getPanelId(panel);
     if (panelId && typeof panelId === 'string') {
-      if (panelId.startsWith('ext-') || panelId.startsWith('extension-') || panelId.startsWith('panel-ext')) {
+      if (panelId.startsWith('ext-') || panelId.startsWith('extension-') || panelId.startsWith('panel-ext') || panelId.startsWith('EXT_PANEL_')) {
         return true;
       }
     }
@@ -176,7 +181,7 @@
 
   // ── Base URL Resolution ───────────────────────────────────────────────────
   // Resolves the original base URL configured for this web panel (e.g. https://gemini.google.com/app, https://x.com/)
-  // so that closing the panel returns it to a fresh prompt rather than an old chat session.
+  // so that closing the panel returns it to the exact home page rather than an old chat session.
   function getPanelConfiguredUrl(panel) {
     if (!panel) return null;
 
@@ -273,7 +278,7 @@
   }
 
   // ── Reset Webview to Base URL ───────────────────────────────────────────────
-  function resetWebviewToBaseUrl(panel, wv) {
+  function resetWebviewToBaseUrl(panel, wv, forcedTargetUrl) {
     if (!panel) return;
     if (!wv) wv = getWebview(panel);
     if (!wv) return;
@@ -297,8 +302,8 @@
 
     // Prioritize live DOM property over potentially stale getAttribute
     const currentSrc = wv.src || wv.getAttribute('src') || '';
-    const configuredUrl = getPanelConfiguredUrl(panel);
-    const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || currentSrc;
+    const configuredUrl = forcedTargetUrl || getPanelConfiguredUrl(panel);
+    const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || (currentSrc && currentSrc.startsWith('http') ? new URL(currentSrc).origin + '/' : currentSrc);
 
     // Internal non-http schemes (chrome://, vivaldi://, file://) must not be mutated
     if (!targetUrl || !targetUrl.startsWith('http')) return;
@@ -421,15 +426,22 @@
     log('Edge Close (X) action triggered — flagging panel for clean reset');
 
     const panelId = getPanelId(panel);
+    const wv = getWebview(panel);
+    const tabId = wv ? getTabId(wv) : null;
+    const configuredUrl = getPanelConfiguredUrl(panel);
+
     if (panelId) {
       pendingResetPanels.add(panelId);
+      if (configuredUrl) panelResetUrls.set(panelId, configuredUrl);
     }
-
-    const wv = getWebview(panel);
+    if (tabId) {
+      pendingResetPanels.add(`tab-${tabId}`);
+      if (configuredUrl) panelResetUrls.set(`tab-${tabId}`, configuredUrl);
+    }
 
     // Step 1: Immediately reset webview & Chromium tab to clean base URL
     if (wv) {
-      resetWebviewToBaseUrl(panel, wv);
+      resetWebviewToBaseUrl(panel, wv, configuredUrl);
     }
 
     // Step 2: Trigger UI panel slide-out
@@ -450,12 +462,17 @@
     try {
       const panelId = rge.props?.webPanel?.id;
       const configuredUrl = rge.props?.webPanel?.url;
-      const wv = rge.refWebpanelwebview?.current;
+      const wv = rge.refWebpanelwebview?.current || document.querySelector('#panels webview');
       const tabId = rge.props?.tabId || (wv ? getTabId(wv) : null);
       const domPanel = rge.nodeRef?.current || (panelId ? document.querySelector(`#panels [data-id="${panelId}"], #panels .panel, #panels .webpanel`) : null);
 
       if (panelId) {
         pendingResetPanels.add(panelId);
+        if (configuredUrl) panelResetUrls.set(panelId, configuredUrl);
+      }
+      if (tabId) {
+        pendingResetPanels.add(`tab-${tabId}`);
+        if (configuredUrl) panelResetUrls.set(`tab-${tabId}`, configuredUrl);
       }
 
       // 1. Reset via native home() if not extension
@@ -465,7 +482,7 @@
 
       // 2. Compute target base URL and update Chromium tab
       const currentSrc = wv ? (wv.src || wv.getAttribute('src')) : null;
-      const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || (currentSrc ? new URL(currentSrc).origin + '/' : null);
+      const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || (currentSrc && currentSrc.startsWith('http') ? new URL(currentSrc).origin + '/' : null);
 
       if (tabId && targetUrl && targetUrl.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.update) {
         try {
@@ -480,18 +497,22 @@
       // 3. Close panel UI
       if (domPanel) {
         closeActivePanel(domPanel);
+      } else {
+        closeActivePanel();
       }
 
       // 4. Discard after glide delay
       if (tabId && targetUrl && targetUrl.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.discard) {
         setTimeout(() => {
           chrome.tabs.discard(tabId, () => {
-            discardedTabs.add(tabId);
+            if (!chrome.runtime?.lastError) {
+              discardedTabs.add(tabId);
+            }
           });
         }, GLIDE_DELAY_MS);
       }
     } catch (err) {
-      console.warn('__edgeCloseWebPanel error:', err);
+      console.warn('[EdgePanelMod] __edgeCloseWebPanel error:', err);
     }
   };
 
@@ -511,19 +532,29 @@
     if (!wv) return;
 
     const panelId = getPanelId(panel);
-    const wasExplicitlyClosed = panelId && pendingResetPanels.has(panelId);
+    const tabId = getTabId(wv);
+
+    const wasExplicitlyClosed = Boolean(
+      (panelId && pendingResetPanels.has(panelId)) ||
+      (tabId && pendingResetPanels.has(`tab-${tabId}`))
+    );
 
     if (wasExplicitlyClosed) {
-      pendingResetPanels.delete(panelId);
+      if (panelId) pendingResetPanels.delete(panelId);
+      if (tabId) pendingResetPanels.delete(`tab-${tabId}`);
+
+      const savedUrl = (panelId && panelResetUrls.get(panelId)) || (tabId && panelResetUrls.get(`tab-${tabId}`));
+      if (panelId) panelResetUrls.delete(panelId);
+      if (tabId) panelResetUrls.delete(`tab-${tabId}`);
+
       log('Reopening explicitly closed panel; ensuring clean base URL state');
-      resetWebviewToBaseUrl(panel, wv);
+      resetWebviewToBaseUrl(panel, wv, savedUrl);
     } else {
       // Panel was simply auto-hidden or toggled! Preserve existing conversation completely.
       log('Reopening auto-hidden/toggled panel; preserving active session untouched');
     }
 
     // If tab was discarded, revive cleanly
-    const tabId = getTabId(wv);
     const isDiscarded = tabId && discardedTabs.has(tabId);
 
     if (isDiscarded) {
@@ -642,40 +673,6 @@
     }
   }
 
-  // ── Web Panel Shortcut Passthrough & Key Event Guard ─────────────────────────
-  // Prevents Vivaldi UI from swallowing text-editing shortcuts (Ctrl+Enter, Meta+Enter,
-  // Shift+Enter, Ctrl+Shift+Enter) when focus is inside a Web Panel (e.g. Twitter/X
-  // tweet submission, ChatGPT, Claude, GitHub comments, Discord, Slack).
-  let shortcutGuardActive = false;
-  function setupPanelShortcutGuard() {
-    if (shortcutGuardActive) return;
-    shortcutGuardActive = true;
-
-    window.addEventListener('keydown', (e) => {
-      const activeEl = document.activeElement;
-      const target = e.target;
-      const isInsidePanel = Boolean(
-        (activeEl && (activeEl.closest('#panels') || activeEl.closest('.webpanel') || activeEl.tagName === 'WEBVIEW')) ||
-        (target && (target.closest('#panels') || target.closest('.webpanel') || target.tagName === 'WEBVIEW'))
-      );
-
-      if (!isInsidePanel) return;
-
-      const isEnter = e.key === 'Enter' || e.code === 'Enter';
-      const isModifierEnter = isEnter && (e.ctrlKey || e.metaKey || e.shiftKey);
-
-      if (isModifierEnter) {
-        // Stop immediate propagation to outer Vivaldi action dispatchers so the keystroke
-        // is delivered directly into the webview guest process without browser hijacking
-        if (e.stopImmediatePropagation) {
-          e.stopImmediatePropagation();
-        } else {
-          e.stopPropagation();
-        }
-      }
-    }, true);
-  }
-
   // ── Global Fallback Close Click Guard ──────────────────────────────────────
   document.addEventListener('click', (e) => {
     const closeBtn = e.target.closest('#panels button.close, #panels .mod-edge-close-btn, #panels [aria-label="Close Panel"]');
@@ -691,7 +688,6 @@
 
   // ── Initialization & Scoped Container Watcher ──────────────────────────────
   function scanAndInit() {
-    setupPanelShortcutGuard();
     const panels = getLivePanels();
     if (!panels.length) return false;
     panels.forEach(observePanel);
@@ -707,7 +703,6 @@
   }
 
   function bootstrap() {
-    setupPanelShortcutGuard();
     if (scanAndInit()) return;
 
     const observer = new MutationObserver((_, obs) => {

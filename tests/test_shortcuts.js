@@ -60,38 +60,39 @@ assert.strictEqual(simulateShortcutAllowedInText('ctrl+n'), true, 'Ctrl+N (New W
 
 console.log('  ✔ All shortcut passthrough assertions passed.');
 
-// 3. Test Web Panel Focus Guard
-console.log('▶ Test 3: Simulating Web Panel Focus & Keydown Protection Guard');
-function simulatePanelKeydownCapture(event, activeElementInsidePanel) {
-  const isTargetInPanel = activeElementInsidePanel;
-  let propagationStopped = false;
+// 3. Test Web Panel Focus in handleShortcut
+console.log('▶ Test 3: Simulating Web Panel Focus in handleShortcut');
+function simulateHandleShortcut(activeElement, combo) {
+  const isInsidePanel = Boolean(activeElement?.closest('#panels'));
+  const isWebview = activeElement?.tagName === 'WEBVIEW';
+  const isAllowedInText = simulateShortcutAllowedInText(combo);
 
-  const mockEvent = {
-    ...event,
-    stopImmediatePropagation: () => { propagationStopped = true; },
-    stopPropagation: () => { propagationStopped = true; }
-  };
-
-  const isEnter = mockEvent.key === 'Enter' || mockEvent.code === 'Enter';
-  const isModifierEnter = isEnter && (mockEvent.ctrlKey || mockEvent.metaKey || mockEvent.shiftKey);
-
-  if (isTargetInPanel && isModifierEnter) {
-    mockEvent.stopImmediatePropagation();
-    return { forwardedToWebview: true, propagationStopped: true };
+  if (isWebview && isInsidePanel) {
+    if (!isAllowedInText) {
+      return { browserExecuted: false, deliveredToGuestWebview: true };
+    } else {
+      return { browserExecuted: true, deliveredToGuestWebview: false };
+    }
   }
-  return { forwardedToWebview: false, propagationStopped: false };
+  return { browserExecuted: isAllowedInText, deliveredToGuestWebview: false };
 }
 
-const tweetSubmitEvent = { ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, key: 'Enter' };
-const resInPanel = simulatePanelKeydownCapture(tweetSubmitEvent, true);
-assert.strictEqual(resInPanel.forwardedToWebview, true, 'Tweet submit Ctrl+Enter must forward to webview');
-assert.strictEqual(resInPanel.propagationStopped, true, 'Propagation must be stopped to protect webview');
+const mockPanelWebview = {
+  tagName: 'WEBVIEW',
+  closest: (sel) => (sel === '#panels' ? {} : null)
+};
 
-const resOutsidePanel = simulatePanelKeydownCapture(tweetSubmitEvent, false);
-assert.strictEqual(resOutsidePanel.forwardedToWebview, false, 'Outside panel does not stop normal browser actions');
-assert.strictEqual(resOutsidePanel.propagationStopped, false);
+const ctrlEnterRes = simulateHandleShortcut(mockPanelWebview, 'ctrl+enter');
+assert.strictEqual(ctrlEnterRes.deliveredToGuestWebview, true, 'Ctrl+Enter inside web panel must deliver to guest webview');
+assert.strictEqual(ctrlEnterRes.browserExecuted, false, 'Ctrl+Enter must not trigger browser action');
 
-console.log('  ✔ Web Panel focus capture logic verified.');
+const shiftEnterRes = simulateHandleShortcut(mockPanelWebview, 'shift+enter');
+assert.strictEqual(shiftEnterRes.deliveredToGuestWebview, true, 'Shift+Enter inside web panel must deliver to guest webview');
+
+const newTabRes = simulateHandleShortcut(mockPanelWebview, 'ctrl+t');
+assert.strictEqual(newTabRes.browserExecuted, true, 'Ctrl+T must trigger browser action');
+
+console.log('  ✔ Web Panel focus and shortcut passthrough logic verified.');
 
 // 4. Test actual patch-bundle.py execution on mock bundle.js
 console.log('▶ Test 4: Mock bundle.js patching execution');
