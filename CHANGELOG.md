@@ -24,6 +24,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.1.1** | Native Tab Lifecycle Discovery | Sub-pages still restored by Chromium session store | Discarded tabs kept `tabId` alive in `Pge.Z` store | Added `_createRelatedTab()` call into React `componentDidUpdate` |
 | **v1.1.2** | React-DOM Synchronization | Race between CDU and DOM MutationObserver | Flag deletion in CDU caused DOM observer to see auto-hide | Added 3000ms safety cache `recentlyResetPanels` |
 | **v1.2.0** | The Root-Cause Permanent Fix | Fragile heuristic race conditions across various complex web apps | `chrome.tabs.discard()` left tab ID in Chromium's session tree and `Pge.Z`; on reopen `_getRelatedTabId()` was not empty, blocking fresh tab instantiation | Switched to `chrome.tabs.remove()` on explicit close `(X)`. Triggers native `onRemoved` -> `offerEraseTabId` -> complete memory wipe. On reopen, `_getRelatedTabId()` is genuinely undefined, so `_createRelatedTab()` creates a 100% brand-new Chromium tab pointing straight to `webPanel.url`. Zero race conditions, zero legacy workarounds. |
+| **v1.2.1** | Drag Width Limiter Pattern Fix | Panel dragging capped at 61.8% despite patch | Patcher searched for `"0.618"` instead of `".618*this.context.innerWidth"` | Updated patcher pattern to match `.618*this.context.innerWidth` and expand to `.880*this.context.innerWidth`, unlocking full 88% screen width dragging |
 
 ---
 
@@ -192,6 +193,22 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 
 ---
 
+### Iteration 12 (v1.2.1): Full 88% Drag Width Limiter Expansion
+* **The Goal**: Ensure web panels can be dragged to **88% of screen width** without artificial clamping.
+* **What Broke**:
+  - The patcher was expanding CSS `65vw -> 88vw`, but when dragging the slider handle with the mouse, Vivaldi stopped expanding past ~61.8% width.
+* **Why It Happened (The Autopsy)**:
+  - In Vivaldi's `bundle.js`, the resize handler calls:
+    ```javascript
+    limitPanelWidth = e => (0, IT.Z)(e, Ji.Ej, .618 * this.context.innerWidth);
+    ```
+  - The patcher was looking for `"0.618"` with a leading zero. Because Vivaldi's minifier generated `.618` without a leading zero, the pattern search failed silently and the drag limit remained clamped to the Golden Ratio (61.8%).
+* **The Engineering Fix**:
+  - Updated `src/patch-bundle.py` to match `.618*this.context.innerWidth` and expand it to `.880*this.context.innerWidth`.
+  - Combined with the `88vw` CSS container clamp, panels can now be freely dragged across the entire desktop up to 88% width!
+
+---
+
 ## 🏆 Current Architecture Summary
 
 ```
@@ -201,6 +218,15 @@ User Action: Click Outside (Blur)
 Panel Slides Away (Visual Only)
        │
        └─► Session Intact • Memory Warm • Instant Multitask Resume
+
+────────────────────────────────────────────────────────────────────────
+
+User Action: Dragging Panel Border (Resize)
+       │
+       ▼
+limitPanelWidth (.880 * innerWidth) + CSS (88vw)
+       │
+       └─► Expands freely up to 88% of desktop width side-by-side!
 
 ────────────────────────────────────────────────────────────────────────
 
@@ -219,9 +245,12 @@ User Action: Click Dedicated [X] Button (Any Web Panel in Vivaldi)
        │
        ├─► 1. Record panel ID in closedPanelsForReset
        ├─► 2. Slide panel closed (150ms glide animation)
-       └─► 3. Discard guest renderer process down to 0.0 MB RAM
+       └─► 3. chrome.tabs.remove(tabId) -> complete tab destruction
                │
-               ▼
+               ├─► Chromium fires chrome.tabs.onRemoved
+               └─► Vivaldi internal pe() handler triggers Pge.Z.offerEraseTabId()
+                       │
+                       ▼
 User Reopens Panel Later:
        │
        ├─► React componentDidUpdate detects reopen transition: !e.isVisible && this.props.isVisible

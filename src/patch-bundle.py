@@ -78,13 +78,17 @@ def patch_bundle(bundle_path):
 
     changes = 0
 
-    # 1. Expand Math.clamp drag limiter (0.618 -> 0.880)
-    if "0.618" in content:
+    # 1. Expand Math.clamp drag limiter (.618 / 0.618 -> .880 / 0.880 [88% width])
+    if ".618*this.context.innerWidth" in content:
+        content = content.replace(".618*this.context.innerWidth", ".880*this.context.innerWidth")
+        print(" -> Patched width clamp factor (.618 -> .880 [88% width])")
+        changes += 1
+    elif "0.618" in content:
         content = content.replace("0.618", "0.880")
         print(" -> Patched width clamp factor (0.618 -> 0.880 [88% width])")
         changes += 1
-    elif "0.880" in content:
-        print(" -> Drag clamp factor already set to 0.880")
+    elif ".880*this.context.innerWidth" in content or "0.880" in content:
+        print(" -> Drag clamp factor already set to 0.880 (88% width)")
     else:
         print(" -> Note: 0.618 clamp pattern not matched")
 
