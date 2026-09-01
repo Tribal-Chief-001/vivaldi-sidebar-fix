@@ -4,7 +4,8 @@ Vivaldi bundle.js Patcher (Cross-Platform: Linux, macOS, Windows, FreeBSD):
 1. Expands maximum panel width drag limit from Golden Ratio (0.618 / 61.8%) to 0.880 (88%).
 2. Expands container max-width CSS from 65vw to 88vw.
 3. Enables native Vivaldi Close (X) button even with Floating & Auto-Close enabled.
-4. Fixes Web Panel Shortcut Interception:
+4. Hooks Rge (WebPanel) close button directly to home() reset and edge-panel-mod discard.
+5. Fixes Web Panel Shortcut Interception:
    - Adds "ctrl+enter", "meta+enter", "ctrl+shift+enter", "meta+shift+enter", "alt+enter"
      to the text editing passthrough set (f) so web apps (Twitter/X tweet submit, ChatGPT,
      Claude, Discord, Slack, GitHub comments) receive instant submit shortcuts instead of
@@ -110,7 +111,17 @@ def patch_bundle(bundle_path):
     elif "shouldShowCloseButton=e=>Boolean(this.props.prefValues[D.kPanelsShowCloseButton]);" in content:
         print(" -> Native close button already enabled in bundle.js")
 
-    # 4. Patch text editing shortcut passthrough set (f) to include Ctrl+Enter / Meta+Enter
+    # 4. Patch Rge (WebPanel) close button to trigger __edgeCloseWebPanel or native home() + closePanel
+    old_rge_close = 'this.props.showCloseButton&&(0,Fi.jsx)("button",{className:"close transparent",onClick:()=>ii.Z.closePanel(this.winId),title:(0,k.Z)("Close Panel"),children:Wge})'
+    new_rge_close = 'this.props.showCloseButton&&(0,Fi.jsx)("button",{className:"close transparent",onClick:()=>{(window.__edgeCloseWebPanel?window.__edgeCloseWebPanel(this):(this.home(),ii.Z.closePanel(this.winId)))},title:(0,k.Z)("Close Panel"),children:Wge})'
+    if old_rge_close in content:
+        content = content.replace(old_rge_close, new_rge_close, 1)
+        print(" -> Connected native Rge close button to Edge reset & discard handler")
+        changes += 1
+    elif '__edgeCloseWebPanel' in content:
+        print(" -> Native Rge close button already connected to Edge reset handler")
+
+    # 5. Patch text editing shortcut passthrough set (f) to include Ctrl+Enter / Meta+Enter
     target_f = 'let f=new Set(["left","right","shift+left","shift+right","shift+up","shift+down","enter","shift+enter"]);f=new Set([...f,"ctrl+a","ctrl+z","ctrl+y","ctrl+u","ctrl+left","ctrl+right","ctrl+backspace","ctrl+delete","ctrl+home","ctrl+end","ctrl+shift+left","ctrl+shift+right","shift+home","shift+end"]);'
     new_f = 'let f=new Set(["left","right","shift+left","shift+right","shift+up","shift+down","enter","shift+enter","ctrl+enter","meta+enter","ctrl+shift+enter","meta+shift+enter","alt+enter"]);f=new Set([...f,"ctrl+a","ctrl+z","ctrl+y","ctrl+u","ctrl+left","ctrl+right","ctrl+backspace","ctrl+delete","ctrl+home","ctrl+end","ctrl+shift+left","ctrl+shift+right","shift+home","shift+end"]);'
     if target_f in content:
@@ -120,7 +131,7 @@ def patch_bundle(bundle_path):
     elif 'ctrl+enter' in content and 'shift+enter","ctrl+enter"' in content:
         print(" -> Shortcut passthrough set (f) already includes Ctrl+Enter")
 
-    # 5. Patch Web Panel webview focus check in handleShortcut
+    # 6. Patch Web Panel webview focus check in handleShortcut
     target_webview_shortcut = '"WEBVIEW"===m?l.Z.windowPrivate.getFocusedElementInfo(h).then((({tagName:n,editable:i,role:s})=>{if(!i||S(r)){const i="SELECT"===n,o="SPAN"===n&&"spinbutton"===s;(!i&&!o||i&&S(r))&&v(e,h,O(r),t)}})):v(e,h,O(r),t)'
     new_webview_shortcut = '"WEBVIEW"===m?(p?.closest?.("#panels")?S(r)&&v(e,h,O(r),t):l.Z.windowPrivate.getFocusedElementInfo(h).then((({tagName:n,editable:i,role:s})=>{if(!i||S(r)){const i="SELECT"===n,o="SPAN"===n&&"spinbutton"===s;(!i&&!o||i&&S(r))&&v(e,h,O(r),t)}}))):v(e,h,O(r),t)'
     if target_webview_shortcut in content:

@@ -18,6 +18,7 @@ assert(patcherSource.includes('meta+enter'), 'Patcher includes meta+enter');
 assert(patcherSource.includes('ctrl+shift+enter'), 'Patcher includes ctrl+shift+enter');
 assert(patcherSource.includes('alt+enter'), 'Patcher includes alt+enter');
 assert(patcherSource.includes('closest?.("#panels")'), 'Patcher includes #panels webview focus check');
+assert(patcherSource.includes('__edgeCloseWebPanel'), 'Patcher includes __edgeCloseWebPanel native bridge');
 console.log('  ✔ Patcher syntax and replacement patterns verified.');
 
 // 2. Test S(e) shortcutAllowedInText simulation
@@ -99,6 +100,7 @@ const mockContent = `
 const D = { kPanelsShowCloseButton: "kPanelsShowCloseButton" };
 let f=new Set(["left","right","shift+left","shift+right","shift+up","shift+down","enter","shift+enter"]);f=new Set([...f,"ctrl+a","ctrl+z","ctrl+y","ctrl+u","ctrl+left","ctrl+right","ctrl+backspace","ctrl+delete","ctrl+home","ctrl+end","ctrl+shift+left","ctrl+shift+right","shift+home","shift+end"]);
 shouldShowCloseButton=e=>this.props.prefValues[D.kPanelsShowCloseButton]&&!((si.ZP.getSeparateFloating(e,this.winId)||this.props.prefValues[D.kPanelsAsOverlayEnabled])&&this.props.prefValues[D.kPanelsAsOverlayAutoClose]);
+this.props.showCloseButton&&(0,Fi.jsx)("button",{className:"close transparent",onClick:()=>ii.Z.closePanel(this.winId),title:(0,k.Z)("Close Panel"),children:Wge})
 const clamp = 0.618;
 const css = "65vw";
 "WEBVIEW"===m?l.Z.windowPrivate.getFocusedElementInfo(h).then((({tagName:n,editable:i,role:s})=>{if(!i||S(r)){const i="SELECT"===n,o="SPAN"===n&&"spinbutton"===s;(!i&&!o||i&&S(r))&&v(e,h,O(r),t)}})):v(e,h,O(r),t)
@@ -113,6 +115,7 @@ assert(patchedContent.includes('0.880'), '0.618 patched to 0.880');
 assert(patchedContent.includes('88vw'), '65vw patched to 88vw');
 assert(patchedContent.includes('ctrl+enter'), 'ctrl+enter added to f');
 assert(patchedContent.includes('p?.closest?.("#panels")'), 'handleShortcut patched for #panels');
+assert(patchedContent.includes('__edgeCloseWebPanel'), '__edgeCloseWebPanel hooked into Rge close button');
 fs.unlinkSync(tmpMockBundle);
 if (fs.existsSync(tmpMockBundle + '.orig')) fs.unlinkSync(tmpMockBundle + '.orig');
 

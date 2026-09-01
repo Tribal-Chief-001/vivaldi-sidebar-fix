@@ -13,21 +13,22 @@
 //        preserving the active session, form state, and chat history untouched.
 //     2. Clean Base URL Reset on Explicit (X) Click:
 //        Clicking the dedicated 'X' button resets the panel to its clean base URL
-//        (e.g. https://gemini.google.com/app) via chrome.tabs.update() and webview
-//        navigation, so the next open starts a fresh prompt.
+//        (e.g. https://gemini.google.com/app, https://x.com/, https://claude.ai/new)
+//        via native Rge.home(), chrome.tabs.update(), and webview navigation.
 //     3. 0.0 MB RAM Discard:
 //        After an off-screen glide delay (150ms), discards the guest renderer process
 //        down to 0.0 MB RAM via chrome.tabs.discard().
 //     4. Resilient Atomic Wakeup:
 //        Wakes up the discarded webview cleanly on reopen via source-reassignment,
 //        preventing blank black screens, zombie processes, or infinite reload loops.
-//     5. Edge-Case Hardening:
+//     5. Instant Submit Shortcut Passthrough:
+//        Protects Ctrl+Enter / Cmd+Enter inside web panels (Twitter/X, ChatGPT, Claude)
+//        from being intercepted by Vivaldi's outer action dispatcher.
+//     6. Edge-Case Hardening:
 //        - Protects extension panels (Bitwarden, Translate) from discard or URL resets.
 //        - Guards against internal schemes (chrome://, vivaldi://, file://).
 //        - Atomic debounce prevents rapid-click oscillation and duplicate discards.
 //        - Tab removal listener cleans state Sets, preventing memory leaks.
-//        - SPA hash routing and subpaths are cleanly handled without breaking navigation.
-//        - Reopening cancels pending discard timers immediately.
 //        - Multi-tier close fallback works even if the sidebar switcher is hidden.
 //        - Scoped MutationObserver prevents full document.body DOM thrashing.
 // =============================================================================
@@ -59,44 +60,35 @@
     });
   }
 
-  // ── Logging ───────────────────────────────────────────────────────────────
-  const LOG_PREFIX = '%c[EdgePanels]';
-  const LOG_STYLE = 'color: #00d2ff; font-weight: bold;';
-
+  // ── Debug Logging ─────────────────────────────────────────────────────────
+  const DEBUG = false;
   function log(...args) {
-    console.log(LOG_PREFIX, LOG_STYLE, ...args);
+    if (DEBUG) console.log('[EdgePanelMod]', ...args);
   }
-
   function warn(...args) {
-    console.warn(LOG_PREFIX, LOG_STYLE, ...args);
-  }
-
-  function error(...args) {
-    console.error(LOG_PREFIX, LOG_STYLE, ...args);
+    console.warn('[EdgePanelMod]', ...args);
   }
 
   // ── DOM Helpers ───────────────────────────────────────────────────────────
   function getLivePanels() {
-    return Array.from(document.querySelectorAll('#panels .panel.webpanel'));
+    return Array.from(document.querySelectorAll('#panels .panel, #panels .webpanel, .panel-group .panel, #panels-container .panel'));
   }
 
   function getWebview(panel) {
-    return panel.querySelector('.webpanel-content webview');
+    if (!panel) return null;
+    return panel.querySelector('webview') || document.querySelector('#panels webview');
   }
 
   function getTabId(wv) {
     if (!wv) return null;
-    const tabIdAttr = wv.getAttribute('tab_id') || wv.getAttribute('tabId');
-    if (tabIdAttr) {
-      const parsed = parseInt(tabIdAttr, 10);
-      if (!isNaN(parsed) && parsed > 0) return parsed;
-    }
-    return null;
+    const raw = wv.getAttribute('tab_id') || wv.tab_id;
+    const parsed = parseInt(raw, 10);
+    return isNaN(parsed) ? null : parsed;
   }
 
   function getPanelId(panel) {
     if (!panel) return null;
-    // 1. Try dataset/attribute
+    // 1. Try DOM attributes
     const idAttr = panel.getAttribute('data-id') || panel.getAttribute('id') || panel.dataset?.id;
     if (idAttr) return idAttr;
 
@@ -164,7 +156,7 @@
     }
 
     // 2. Search webpanel header's Fiber hierarchy
-    const header = panel.querySelector('header.webpanel-header') || panel.querySelector('header');
+    const header = panel.querySelector('header.webpanel-header, .panel-header, header');
     if (header) {
       for (const key of Object.keys(header)) {
         if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
@@ -183,7 +175,7 @@
   }
 
   // ── Base URL Resolution ───────────────────────────────────────────────────
-  // Resolves the original base URL configured for this web panel (e.g. https://gemini.google.com/app)
+  // Resolves the original base URL configured for this web panel (e.g. https://gemini.google.com/app, https://x.com/)
   // so that closing the panel returns it to a fresh prompt rather than an old chat session.
   function getPanelConfiguredUrl(panel) {
     if (!panel) return null;
@@ -216,7 +208,7 @@
     }
 
     // 3. Try extracting from webpanel header React instance
-    const header = panel.querySelector('header.webpanel-header');
+    const header = panel.querySelector('header.webpanel-header, .panel-header, header');
     if (header) {
       for (const key of Object.keys(header)) {
         if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
@@ -237,7 +229,7 @@
     return null;
   }
 
-  // Fallback heuristic: clean conversation deep links and query parameters back to root application URLs
+  // Fallback heuristic: clean conversation deep links, subpaths, and query parameters back to root application URLs
   function getCleanBaseUrlFallback(currentUrl) {
     if (!currentUrl || !currentUrl.startsWith('http')) return null;
     try {
@@ -247,7 +239,7 @@
       // Curated AI workspaces
       if (host.includes('gemini.google.com')) return 'https://gemini.google.com/app';
       if (host.includes('claude.ai')) return 'https://claude.ai/new';
-      if (host.includes('chatgpt.com')) return 'https://chatgpt.com/';
+      if (host.includes('chatgpt.com') || host.includes('chat.openai.com')) return 'https://chatgpt.com/';
       if (host.includes('grok.com')) return 'https://grok.com/';
       if (host.includes('copilot.microsoft.com')) return 'https://copilot.microsoft.com/';
       if (host.includes('notebooklm.google.com') || host.includes('notebook.google.com')) return 'https://notebooklm.google.com/';
@@ -258,10 +250,23 @@
       if (host.includes('qwen.ai')) return 'https://chat.qwen.ai/';
       if (host.includes('z.ai')) return 'https://chat.z.ai/';
 
-      // Generic SPA safe fallback: strip hash and search query parameters while preserving base path
-      u.hash = '';
-      u.search = '';
-      return u.toString();
+      // Social, productivity, and communication platforms
+      if (host === 'x.com' || host === 'www.x.com' || host === 'mobile.x.com') {
+        return 'https://x.com/';
+      }
+      if (host === 'twitter.com' || host === 'www.twitter.com' || host === 'mobile.twitter.com') {
+        return 'https://twitter.com/';
+      }
+      if (host.includes('reddit.com')) return 'https://www.reddit.com/';
+      if (host.includes('youtube.com')) return 'https://www.youtube.com/';
+      if (host.includes('github.com')) return 'https://github.com/';
+      if (host.includes('discord.com')) return 'https://discord.com/app';
+      if (host.includes('slack.com')) return 'https://app.slack.com/';
+      if (host.includes('whatsapp.com')) return 'https://web.whatsapp.com/';
+      if (host.includes('telegram.org') || host.includes('web.telegram.org')) return 'https://web.telegram.org/';
+
+      // Universal base domain fallback for ANY web panel (resets to home page of domain)
+      return u.origin + '/';
     } catch (_) {
       return null;
     }
@@ -339,7 +344,7 @@
 
     // 2. Fallback: trigger Vivaldi panel toggle button
     const toggleBtn = document.querySelector(
-      '#panels button.panel-collapse-guard, button[name="PanelToggle"], #panels .panel-header button.close'
+      '#panels button.panel-collapse-guard, button[name="PanelToggle"], #panels .panel-header button.close, #panels header button.close'
     );
     if (toggleBtn && typeof toggleBtn.click === 'function') {
       toggleBtn.click();
@@ -438,6 +443,58 @@
     }, GLIDE_DELAY_MS);
   }
 
+  // ── Global Native Rge Close Bridge ──────────────────────────────────────────
+  // Called directly when the user clicks Vivaldi's native close button in Rge toolbar
+  window.__edgeCloseWebPanel = function (rge) {
+    if (!rge) return;
+    try {
+      const panelId = rge.props?.webPanel?.id;
+      const configuredUrl = rge.props?.webPanel?.url;
+      const wv = rge.refWebpanelwebview?.current;
+      const tabId = rge.props?.tabId || (wv ? getTabId(wv) : null);
+      const domPanel = rge.nodeRef?.current || (panelId ? document.querySelector(`#panels [data-id="${panelId}"], #panels .panel, #panels .webpanel`) : null);
+
+      if (panelId) {
+        pendingResetPanels.add(panelId);
+      }
+
+      // 1. Reset via native home() if not extension
+      if (typeof rge.home === 'function' && !isExtensionPanel(domPanel)) {
+        try { rge.home(); } catch (_) {}
+      }
+
+      // 2. Compute target base URL and update Chromium tab
+      const currentSrc = wv ? (wv.src || wv.getAttribute('src')) : null;
+      const targetUrl = configuredUrl || getCleanBaseUrlFallback(currentSrc) || (currentSrc ? new URL(currentSrc).origin + '/' : null);
+
+      if (tabId && targetUrl && targetUrl.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.update) {
+        try {
+          chrome.tabs.update(tabId, { url: targetUrl });
+        } catch (_) {}
+      }
+
+      if (wv && targetUrl && wv.src !== targetUrl) {
+        try { wv.src = targetUrl; } catch (_) {}
+      }
+
+      // 3. Close panel UI
+      if (domPanel) {
+        closeActivePanel(domPanel);
+      }
+
+      // 4. Discard after glide delay
+      if (tabId && targetUrl && targetUrl.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.discard) {
+        setTimeout(() => {
+          chrome.tabs.discard(tabId, () => {
+            discardedTabs.add(tabId);
+          });
+        }, GLIDE_DELAY_MS);
+      }
+    } catch (err) {
+      console.warn('__edgeCloseWebPanel error:', err);
+    }
+  };
+
   // ── Handle Reopen ──────────────────────────────────────────────────────────
   function handleReopen(panel) {
     if (!panel) return;
@@ -506,7 +563,7 @@
 
   // ── Unify / Ensure Close Button in Header ──────────────────────────────────
   function setupCloseButton(panel) {
-    const header = panel.querySelector('header.webpanel-header');
+    const header = panel.querySelector('header.webpanel-header, .panel-header, header');
     if (!header) return;
 
     // Attach capturing click listener to the header if not already bound
@@ -515,7 +572,7 @@
       header.addEventListener(
         'click',
         (e) => {
-          const closeBtn = e.target.closest('button.close');
+          const closeBtn = e.target.closest('button.close, .mod-edge-close-btn, [aria-label="Close Panel"]');
           if (closeBtn) {
             e.stopImmediatePropagation();
             e.preventDefault();
@@ -618,6 +675,19 @@
       }
     }, true);
   }
+
+  // ── Global Fallback Close Click Guard ──────────────────────────────────────
+  document.addEventListener('click', (e) => {
+    const closeBtn = e.target.closest('#panels button.close, #panels .mod-edge-close-btn, #panels [aria-label="Close Panel"]');
+    if (closeBtn) {
+      const panel = closeBtn.closest('.panel, .webpanel, #panels > div') || getLivePanels()[0];
+      if (panel) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        handleEdgeClose(panel);
+      }
+    }
+  }, true);
 
   // ── Initialization & Scoped Container Watcher ──────────────────────────────
   function scanAndInit() {

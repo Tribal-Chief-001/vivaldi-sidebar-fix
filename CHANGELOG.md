@@ -17,6 +17,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.0.4** | Auto-hide vs. Close isolation | Validated session persistence on blur | Reopening checks `pendingResetPanels` before reset | Production release of dual-lifecycle architecture |
 | **v1.0.5** | Comprehensive systems hardening | Extension panel crashes, rapid-click race, memory leaks | Unchecked `chrome.tabs.discard`, timer desync, uncleaned Sets | Full audit resolution: `isExtensionPanel`, atomic debounce, `onRemoved` listener |
 | **v1.0.6** | Web Panel Shortcut & Submit Fix | `Ctrl+Enter` / `Meta+Enter` failed in Twitter, Claude, ChatGPT | Vivaldi `bundle.js` shortcut hijacking + web panel focus blindspot | Patched passthrough set `f`, patched `handleShortcut` for `#panels`, added capture guard |
+| **v1.0.7** | Universal Web Panel Close & Reset | Close button only hid Twitter, Claude, Reddit, etc.; only Gemini reset | Native `Rge` close bypassed `home()`, fallback preserved subpaths | Hooked native `Rge` close button, universal `origin + '/'` reset, global capture listener |
 
 ---
 
@@ -127,6 +128,21 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 
 ---
 
+### Iteration 8 (v1.0.7): Universal Web Panel Close & Base URL Reset (Twitter/X, Claude, ChatGPT, Reddit, GitHub)
+* **The Goal**: Ensure closing *any* web panel (Twitter/X, Claude, ChatGPT, Grok, Reddit, YouTube, GitHub, Discord, Slack, custom sites) cleanly resets back to its home URL and reclaims RAM down to 0.0 MB.
+* **What Broke**:
+  - The close button reset Gemini properly, but on Twitter/X, Claude, and custom web panels, clicking the close button only hid the panel without resetting to the base URL or freeing RAM.
+* **Why It Happened (The Autopsy)**:
+  1. In `bundle.js`, Vivaldi's native `Rge` component rendered its close button with `onClick: () => ii.Z.closePanel(this.winId)`. When clicked, it bypassed `this.home()` and only closed the UI drawer without resetting the webview or triggering discard.
+  2. In `getCleanBaseUrlFallback`, generic fallback logic was preserving deep subpaths (`u.pathname`) for non-Gemini sites, so `targetUrl` was evaluated as identical to `currentSrc` rather than resetting to `https://x.com/`, `https://reddit.com/`, or `u.origin + '/'`.
+* **The Engineering Fix**:
+  1. Connected Vivaldi's native `Rge` close button directly to `__edgeCloseWebPanel(this)` in `patch-bundle.py`, executing `this.home()`, `chrome.tabs.update()`, and `chrome.tabs.discard()`.
+  2. Enhanced `getCleanBaseUrlFallback` to enforce clean base domain resets (`u.origin + '/'` and curated home paths for Twitter/X, Claude, ChatGPT, Grok, Reddit, YouTube, GitHub, Discord, Slack, etc.).
+  3. Added global capturing click listener across all panels and headers.
+  4. Expanded test suite in `tests/test_edge_cases.js` to 22 test vectors across all domains.
+
+---
+
 ## 🏆 Current Architecture Summary
 
 ```
@@ -151,16 +167,17 @@ Press [Ctrl + Enter] / [Cmd + Enter]
 
 ────────────────────────────────────────────────────────────────────────
 
-User Action: Click Dedicated [X] Button
+User Action: Click Dedicated [X] Button (Any Web Panel)
        │
-       ├─► 1. Add panel ID to pendingResetPanels
-       ├─► 2. Navigate tab to clean base domain (chrome.tabs.update)
-       ├─► 3. Slide panel closed (150ms glide animation)
-       └─► 4. Discard guest renderer process down to 0.0 MB RAM
+       ├─► 1. Rge native bridge triggers this.home() + __edgeCloseWebPanel
+       ├─► 2. Add panel ID to pendingResetPanels
+       ├─► 3. Navigate tab to clean base domain: u.origin + '/' (chrome.tabs.update)
+       ├─► 4. Slide panel closed (150ms glide animation)
+       └─► 5. Discard guest renderer process down to 0.0 MB RAM
                │
                ▼
 User Reopens Panel Later:
        │
-       ├─► Check pendingResetPanels -> Reset to clean new chat
+       ├─► Check pendingResetPanels -> Reset to clean new chat / home domain
        └─► Atomically revive GuestView renderer without blank screen or reload loops
 ```
