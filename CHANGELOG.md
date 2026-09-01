@@ -20,6 +20,10 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.0.7** | Universal Web Panel Close & Reset | Close button only hid Twitter, Claude, Reddit, etc.; only Gemini reset | Native `Rge` close bypassed `home()`, fallback preserved subpaths | Hooked native `Rge` close button, universal `origin + '/'` reset, global capture listener |
 | **v1.0.8** | Dual-Key Reset & Clean Native Shortcuts | Some custom panels lost base URL on reopen; window capture blocked Shift+Enter | Panel ID mismatch between close and reopen; window `stopImmediatePropagation` blocked native input | Dual-key tracking (`panelId` + `tabId`) with `panelResetUrls` map; removed window capture listener in favor of pure bundle patch |
 | **v1.0.9** | Native Reopen `this.home()` Lifecycle | Opening deep articles (e.g. artificialanalysis.ai, Grok) reopened old article | Tab discard killed navigation mid-flight; on restore Chromium loaded old committed URL | Patched React `componentDidUpdate` in `Rge` to execute `this.home()` directly on reopen |
+| **v1.1.0** | Webview Wakeup Race Elimination | Reopened panels still overwrote home URL | MutationObserver `handleReopen` reverted `wv.src` | Guarded `handleReopen` so explicit close never re-assigns stale DOM `src` |
+| **v1.1.1** | Native Tab Lifecycle Discovery | Sub-pages still restored by Chromium session store | Discarded tabs kept `tabId` alive in `Pge.Z` store | Added `_createRelatedTab()` call into React `componentDidUpdate` |
+| **v1.1.2** | React-DOM Synchronization | Race between CDU and DOM MutationObserver | Flag deletion in CDU caused DOM observer to see auto-hide | Added 3000ms safety cache `recentlyResetPanels` |
+| **v1.2.0** | The Root-Cause Permanent Fix | Fragile heuristic race conditions across various complex web apps | `chrome.tabs.discard()` left tab ID in Chromium's session tree and `Pge.Z`; on reopen `_getRelatedTabId()` was not empty, blocking fresh tab instantiation | Switched to `chrome.tabs.remove()` on explicit close `(X)`. Triggers native `onRemoved` -> `offerEraseTabId` -> complete memory wipe. On reopen, `_getRelatedTabId()` is genuinely undefined, so `_createRelatedTab()` creates a 100% brand-new Chromium tab pointing straight to `webPanel.url`. Zero race conditions, zero legacy workarounds. |
 
 ---
 
@@ -167,6 +171,24 @@ This document provides a transparent, low-level technical autopsy of every bug, 
     ```
   - When the panel becomes visible on reopen, React immediately triggers Vivaldi's native `this.home()`!
   - `this.home()` executes `this.refWebpanelwebview.current.src = this.props.webPanel.url` (the exact URL you added when creating the panel), cleanly spawning the guest process and loading the homepage live in front of the user with zero race conditions.
+
+---
+
+### Iteration 11 (v1.2.0): The Root-Cause Solution — Complete Tab Destruction & Re-creation
+* **The Core Discovery (The Root Cause of all previous quirks)**:
+  - In Vivaldi, a Web Panel is backed by a hidden Chromium tab ID registered inside Vivaldi's internal store (`Pge.Z`).
+  - When a panel was closed, previous versions called `chrome.tabs.discard(tabId)`. Discarding a tab merely **suspends** it in memory; it keeps the `tabId` registered in `Pge.Z` and preserves the navigation history tree inside Chromium's session store!
+  - When the user reopened the panel, Vivaldi's `_createRelatedTab()` method saw that `this._getRelatedTabId()` was defined and **aborted immediately** without creating a clean tab.
+  - Concurrently, Chromium's Session Restore woke up the suspended tab and replayed its navigation state, racing against and overwriting any DOM assignments!
+* **The Root-Cause Permanent Fix**:
+  1. On explicit close `(X)`, call `chrome.tabs.remove(tabId)` instead of `chrome.tabs.discard(tabId)`.
+  2. Chromium fires `chrome.tabs.onRemoved`, which Vivaldi's internal `pe` handler receives and dispatches `Pge.Z.offerEraseTabId(tabId)`—completely wiping the tab and its history from memory.
+  3. When the user reopens the panel, `_getRelatedTabId()` returns `undefined`. Vivaldi's native `_createRelatedTab()` executes cleanly:
+     ```javascript
+     r.Z.tabs.create({ url: this.props.webPanel.url, windowId: this.winId, vivExtData: JSON.stringify({ panelId: e }) })
+     ```
+     This creates a **100% pristine, brand-new Chromium tab pointing straight to your configured URL**, with zero cached session history, zero race conditions, and zero DOM hacks!
+  4. Auto-hide (clicking outside / multitasking) does NOT remove the tab, keeping active chats and articles 100% warm.
 
 ---
 

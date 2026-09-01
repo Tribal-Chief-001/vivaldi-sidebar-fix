@@ -6,7 +6,7 @@
 *Instant 0.0 MB RAM discard, restored manual close button, 88% full-width expansion, clean base URL reset on close, Twitter/X & AI submit shortcut passthrough (Ctrl+Enter), and glitch-free wakeups.*
 
 [![CI & Integrity Checks](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml/badge.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml)
-[![Release: v1.0.6](https://img.shields.io/badge/Release-v1.1.1-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
+[![Release: v1.2.0](https://img.shields.io/badge/Release-v1.2.0-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vivaldi: Tested](https://img.shields.io/badge/Vivaldi-7.x%20%7C%208.x-ef3939.svg)](https://vivaldi.com)
 [![Platform: Linux | Windows | macOS | BSD](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20BSD-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)
@@ -30,24 +30,24 @@
 >   3. When you press **Ctrl+Enter** to post a tweet or send a prompt, Vivaldi steals the keystroke and does nothing!
 > - **With This Mod**: 
 >   1. **Clicking Outside (Multitasking)**: The panel simply glides away while keeping your active chat warm and ready.
->   2. **Clicking [X] (Finished Work)**: The panel closes, wipes its memory down to **0.0 Megabytes**, and cleanly resets to the home page so your next session starts fresh!
+>   2. **Clicking [X] (Finished Work)**: The panel closes, wipes its memory down to **0.0 Megabytes**, and cleanly destroys the tab session. When reopened, it creates a pristine fresh tab at your home URL!
 >   3. **Pressing Ctrl+Enter**: Instantly submits tweets, prompts, Discord messages, and GitHub comments without browser interference!
 
 ```mermaid
 flowchart TD
-    A["Open Twitter / ChatGPT / Claude / Gemini"] --> B{"What action do you take?"}
+    A["Open Twitter / ChatGPT / Claude / Gemini / Any Site"] --> B{"What action do you take?"}
 
-    B -->|"Press Ctrl+Enter / Cmd+Enter"| J["Text Passthrough Guard"]
+    B -->|"Press Ctrl+Enter / Cmd+Enter"| J["Text Passthrough Guard in bundle.js"]
     J --> K["Instant Tweet / Prompt / Comment Sent!"]
 
-    B -->|"Click Anywhere Outside (Multitask)"| C["Panel Slides Away"]
+    B -->|"Click Anywhere Outside (Multitask)"| C["Panel Slides Away (Visual Only)"]
     C --> D["Active Session Kept Warm in RAM"]
     D --> E["Reopen: Chat context preserved intact!"]
 
     B -->|"Click Dedicated (X) Close Button"| F["150ms Glide Animation"]
-    F --> G["Navigate Tab to Base URL (e.g. gemini.google.com/app)"]
-    G --> H["chrome.tabs.discard: Free RAM down to 0.0 MB"]
-    H --> I["Reopen: Fresh clean chat prompt!"]
+    F --> G["chrome.tabs.remove: Complete tab destruction"]
+    G --> H["Pge.Z memory registry wiped to 0.0 MB"]
+    H --> I["Reopen: _createRelatedTab creates brand new tab at home URL!"]
 ```
 
 ---
@@ -210,31 +210,27 @@ activeSwitchBtn.dispatchEvent(upEvent);
 
 ### 2. Exact Tab ID Targeting & Teardown
 ```javascript
-// Direct extraction from Chromium guest webview
+// Direct extraction from Chromium guest webview and full tab removal
 const tabId = parseInt(wv.getAttribute('tab_id'), 10);
 setTimeout(() => {
-  chrome.tabs.discard(tabId);
+  // Completely destroys the underlying tab session from Chromium & Pge.Z
+  chrome.tabs.remove(tabId);
 }, 150); // Glide delay prevents compositor flashes
 ```
 
-### 3. Reviving Dead Guest Renderers
+### 3. Pristine Tab Creation on Reopen
 ```javascript
-// Chromium kills the guest process on discard. Calling .reload() fails.
-// Resetting wv.src forces Chromium's content layer to re-spawn the process:
-if (isDiscarded && !revivingTabs.has(tabId)) {
-  revivingTabs.add(tabId);
-  wv.src = currentSrc;
+// On reopen, Pge.Z registry is clean, so Vivaldi natively creates a fresh tab:
+_createRelatedTab() {
+  if (void 0 !== this._getRelatedTabId()) return;
+  chrome.tabs.create({ url: this.props.webPanel.url, windowId: this.winId, ... });
 }
 ```
 
-### 4. Text Shortcut Passthrough Guard
+### 4. Text Shortcut Passthrough in bundle.js
 ```javascript
-// Intercepts modifier+enter on capturing phase to prevent outer UI hijacking
-window.addEventListener('keydown', (e) => {
-  if (document.activeElement?.closest('#panels') && (e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.stopImmediatePropagation();
-  }
-}, true);
+// Text editing passthrough set (f) in bundle.js includes Ctrl+Enter:
+let f = new Set([...f, "ctrl+enter", "meta+enter", "ctrl+shift+enter", "meta+shift+enter", "alt+enter"]);
 ```
 
 ---
