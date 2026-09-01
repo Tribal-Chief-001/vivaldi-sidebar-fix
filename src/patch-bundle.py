@@ -12,7 +12,8 @@ Vivaldi bundle.js Patcher (Cross-Platform: Linux, macOS, Windows, FreeBSD):
      being swallowed by Vivaldi's browser command dispatcher.
    - Fixes Web Panel webview focus blindspot in handleShortcut so typing inside web panels
      is never treated as an unfocused background tab.
-6. Connects Rge componentDidUpdate to trigger native this.home() on reopen when closed via (X).
+6. Connects Rge componentDidUpdate to trigger native this._createRelatedTab() and this.home()
+   on reopen when closed via (X).
 """
 
 import os
@@ -35,12 +36,10 @@ CANDIDATE_PATHS = [
 ]
 
 def find_bundle_path():
-    # 1. Check fixed Unix / macOS paths
     for p in CANDIDATE_PATHS:
         if os.path.isfile(p):
             return p
 
-    # 2. Check Windows paths (User & System installs)
     win_roots = []
     for env_var in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"]:
         val = os.environ.get(env_var)
@@ -55,7 +54,6 @@ def find_bundle_path():
         for pat in patterns:
             matches = glob.glob(pat)
             if matches:
-                # Return highest version match if multiple versions exist
                 matches.sort(reverse=True)
                 return matches[0]
 
@@ -142,12 +140,12 @@ def patch_bundle(bundle_path):
     elif 'p?.closest?.("#panels")?S(r)&&v(e,h,O(r),t)' in content:
         print(" -> Web panel webview shortcut dispatcher already patched")
 
-    # 7. Patch Rge componentDidUpdate to trigger this.home() on reopen when flagged by Close (X)
+    # 7. Patch Rge componentDidUpdate to trigger this._createRelatedTab() & this.home() on reopen
     target_cdu = 'e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
-    new_cdu = '(!e.isVisible&&this.props.isVisible&&window.__edgeShouldReset?.(this.props.webPanel?.id)&&this.home()),e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
+    new_cdu = '(!e.isVisible&&this.props.isVisible&&window.__edgeShouldReset?.(this.props.webPanel?.id)&&(this._createRelatedTab(),this.home())),e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
     if target_cdu in content:
         content = content.replace(target_cdu, new_cdu, 1)
-        print(" -> Patched Rge componentDidUpdate for instant home reset on reopen")
+        print(" -> Patched Rge componentDidUpdate for instant home reset & tab recreation on reopen")
         changes += 1
     elif '__edgeShouldReset' in content:
         print(" -> Rge componentDidUpdate already patched for home reset")

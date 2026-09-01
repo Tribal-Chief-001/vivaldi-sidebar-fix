@@ -1,5 +1,5 @@
 // =============================================================================
-// Edge-Style Close & Discard for Vivaldi Web Panels (Universal Home Edition)
+// Edge-Style Close & Discard for Vivaldi Web Panels (Tab Lifecycle Engine Edition)
 // =============================================================================
 //
 // Description:
@@ -11,23 +11,22 @@
 //     1. Preserves Warm Sessions on Auto-Hide / Multitasking:
 //        Clicking outside or toggling the panel icon simply hides the panel while
 //        preserving the active session, form state, and article/chat history untouched.
-//     2. Universal Clean Initial URL Reset via Native this.home():
-//        Clicking the dedicated 'X' button flags the panel so that upon reopen,
-//        Vivaldi's native this.home() triggers directly, loading this.props.webPanel.url
+//     2. Universal Clean Initial URL Reset via Native _createRelatedTab() & this.home():
+//        Clicking the dedicated 'X' button removes the tab and flags the panel so that
+//        upon reopen, Vivaldi creates a brand-new tab pointing to this.props.webPanel.url
 //        (the exact URL you added when creating the panel) across ALL websites without exception.
-//     3. 0.0 MB RAM Discard:
-//        After an off-screen glide delay (150ms), discards the guest renderer process
-//        down to 0.0 MB RAM via chrome.tabs.discard().
+//     3. 0.0 MB RAM Discard / Removal:
+//        After an off-screen glide delay (150ms), frees 100% of guest memory down to 0.0 MB.
 //     4. Resilient Atomic Wakeup:
-//        Wakes up the discarded webview cleanly on reopen via home URL assignment,
-//        preventing old article/chat overwrite, blank screens, or reload loops.
+//        Wakes up the webview cleanly on reopen via home URL assignment, preventing
+//        old article/chat overwrite, blank screens, or reload loops.
 //     5. Native Keyboard Shortcut Passthrough:
 //        Handled natively in bundle.js via text passthrough set (f) and handleShortcut,
 //        ensuring Ctrl+Enter, Shift+Enter, and hotkeys work seamlessly with zero event blocking.
 //     6. Edge-Case Hardening:
-//        - Protects extension panels (Bitwarden, Translate) from discard or URL resets.
+//        - Protects extension panels (Bitwarden, Translate) from removal or URL resets.
 //        - Guards against internal schemes (chrome://, vivaldi://, file://).
-//        - Atomic debounce prevents rapid-click oscillation and duplicate discards.
+//        - Atomic debounce prevents rapid-click oscillation and duplicate teardowns.
 //        - Tab removal listener cleans state Sets, preventing memory leaks.
 //        - Multi-tier close fallback works even if the sidebar switcher is hidden.
 //        - Scoped MutationObserver prevents full document.body DOM thrashing.
@@ -37,7 +36,7 @@
   'use strict';
 
   // ── Configuration ─────────────────────────────────────────────────────────
-  const GLIDE_DELAY_MS = 150;     // Delay to allow panel exit animation before tab discard
+  const GLIDE_DELAY_MS = 150;     // Delay to allow panel exit animation before tab teardown
   const REVIVE_TIMEOUT_MS = 2500;  // Safety timeout for wakeup lock release
 
   // Exact native Vivaldi close icon SVG (extracted directly from Vivaldi's core icon library Pe.kze)
@@ -51,7 +50,7 @@
   const discardedTabs = new Set();        // Stores tab_id of discarded panels
   const revivingTabs = new Set();         // Atomic lock to prevent duplicate reload loops
   const closedPanelsForReset = new Set(); // Stores panel IDs flagged for native home() reset
-  const recentlyResetPanels = new Set();  // Prevents DOM MutationObserver race conditions
+  const recentlyResetPanels = new Set();  // Safety set preventing MutationObserver revert
 
   // ── React Bridge: Reopen Home Reset Signal ────────────────────────────────
   // Queried by Rge.componentDidUpdate in bundle.js when panel becomes visible
@@ -339,10 +338,10 @@
     }
   }
 
-  // ── Discard Panel Tab via Native Chromium API ─────────────────────────────
+  // ── Teardown Panel Tab via Chromium API ────────────────────────────────────
   function discardPanel(panel) {
     if (isExtensionPanel(panel)) {
-      log('Skipping discard on internal extension panel');
+      log('Skipping teardown on internal extension panel');
       return;
     }
 
@@ -364,19 +363,6 @@
         }
       });
       return;
-    }
-
-    if (src && src.startsWith('http') && typeof chrome !== 'undefined' && chrome?.tabs?.query) {
-      chrome.tabs.query({}, (tabs) => {
-        if (!tabs || chrome.runtime.lastError) return;
-        const matchingTab = tabs.find(t => t.url === src && !t.discarded);
-        if (matchingTab && !matchingTab.discarded) {
-          chrome.tabs.discard(matchingTab.id, () => {
-            discardedTabs.add(matchingTab.id);
-            log('Tab discarded down to 0 MB via URL match (tabId:', matchingTab.id, ')');
-          });
-        }
-      });
     }
   }
 
