@@ -3,7 +3,14 @@
 Vivaldi bundle.js Patcher (Cross-Platform: Linux, macOS, Windows, FreeBSD):
 1. Expands maximum panel width drag limit from Golden Ratio (0.618 / 61.8%) to 0.880 (88%).
 2. Expands container max-width CSS from 65vw to 88vw.
-3. Preserves exact byte lengths to maintain source-map and runtime alignment.
+3. Enables native Vivaldi Close (X) button even with Floating & Auto-Close enabled.
+4. Fixes Web Panel Shortcut Interception:
+   - Adds "ctrl+enter", "meta+enter", "ctrl+shift+enter", "meta+shift+enter", "alt+enter"
+     to the text editing passthrough set (f) so web apps (Twitter/X tweet submit, ChatGPT,
+     Claude, Discord, Slack, GitHub comments) receive instant submit shortcuts instead of
+     being swallowed by Vivaldi's browser command dispatcher.
+   - Fixes Web Panel webview focus blindspot in handleShortcut so typing inside web panels
+     is never treated as an unfocused background tab.
 """
 
 import os
@@ -72,7 +79,6 @@ def patch_bundle(bundle_path):
     changes = 0
 
     # 1. Expand Math.clamp drag limiter (0.618 -> 0.880)
-    # Target: 0.618*this.context.innerWidth or similar
     if "0.618" in content:
         content = content.replace("0.618", "0.880")
         print(" -> Patched width clamp factor (0.618 -> 0.880 [88% width])")
@@ -80,10 +86,9 @@ def patch_bundle(bundle_path):
     elif "0.880" in content:
         print(" -> Drag clamp factor already set to 0.880")
     else:
-        print(" -> Note: 0.618 clamp pattern not matched (may already be patched or different build)")
+        print(" -> Note: 0.618 clamp pattern not matched")
 
     # 2. Expand CSS container max-width clamp (65vw -> 88vw)
-    # Target: `65vw` or `min(${...}px, 65vw)`
     if "65vw" in content:
         content = content.replace("65vw", "88vw")
         print(" -> Patched container max-width (65vw -> 88vw)")
@@ -104,6 +109,26 @@ def patch_bundle(bundle_path):
         changes += 1
     elif "shouldShowCloseButton=e=>Boolean(this.props.prefValues[D.kPanelsShowCloseButton]);" in content:
         print(" -> Native close button already enabled in bundle.js")
+
+    # 4. Patch text editing shortcut passthrough set (f) to include Ctrl+Enter / Meta+Enter
+    target_f = 'let f=new Set(["left","right","shift+left","shift+right","shift+up","shift+down","enter","shift+enter"]);f=new Set([...f,"ctrl+a","ctrl+z","ctrl+y","ctrl+u","ctrl+left","ctrl+right","ctrl+backspace","ctrl+delete","ctrl+home","ctrl+end","ctrl+shift+left","ctrl+shift+right","shift+home","shift+end"]);'
+    new_f = 'let f=new Set(["left","right","shift+left","shift+right","shift+up","shift+down","enter","shift+enter","ctrl+enter","meta+enter","ctrl+shift+enter","meta+shift+enter","alt+enter"]);f=new Set([...f,"ctrl+a","ctrl+z","ctrl+y","ctrl+u","ctrl+left","ctrl+right","ctrl+backspace","ctrl+delete","ctrl+home","ctrl+end","ctrl+shift+left","ctrl+shift+right","shift+home","shift+end"]);'
+    if target_f in content:
+        content = content.replace(target_f, new_f, 1)
+        print(" -> Added Ctrl+Enter / Meta+Enter / Alt+Enter to text editing passthrough set (f)")
+        changes += 1
+    elif 'ctrl+enter' in content and 'shift+enter","ctrl+enter"' in content:
+        print(" -> Shortcut passthrough set (f) already includes Ctrl+Enter")
+
+    # 5. Patch Web Panel webview focus check in handleShortcut
+    target_webview_shortcut = '"WEBVIEW"===m?l.Z.windowPrivate.getFocusedElementInfo(h).then((({tagName:n,editable:i,role:s})=>{if(!i||S(r)){const i="SELECT"===n,o="SPAN"===n&&"spinbutton"===s;(!i&&!o||i&&S(r))&&v(e,h,O(r),t)}})):v(e,h,O(r),t)'
+    new_webview_shortcut = '"WEBVIEW"===m?(p?.closest?.("#panels")?S(r)&&v(e,h,O(r),t):l.Z.windowPrivate.getFocusedElementInfo(h).then((({tagName:n,editable:i,role:s})=>{if(!i||S(r)){const i="SELECT"===n,o="SPAN"===n&&"spinbutton"===s;(!i&&!o||i&&S(r))&&v(e,h,O(r),t)}}))):v(e,h,O(r),t)'
+    if target_webview_shortcut in content:
+        content = content.replace(target_webview_shortcut, new_webview_shortcut, 1)
+        print(" -> Patched web panel webview shortcut dispatcher in handleShortcut")
+        changes += 1
+    elif 'p?.closest?.("#panels")?S(r)&&v(e,h,O(r),t)' in content:
+        print(" -> Web panel webview shortcut dispatcher already patched")
 
     if changes > 0:
         with open(bundle_path, "w", encoding="utf-8") as f:

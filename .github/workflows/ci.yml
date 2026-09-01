@@ -33,6 +33,7 @@ jobs:
         run: |
           node tests/test_mod.js
           node tests/test_edge_cases.js
+          node tests/test_shortcuts.js
 
       - name: Validate Shell Scripts
         run: |

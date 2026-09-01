@@ -16,6 +16,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.0.3** | Clean URL reset on close | Auto-hide and multitasking wiped chat context | Visibility observer triggered reset on any `!isVisible` | Introduced `pendingResetPanels` Set; isolated reset strictly to 'X' |
 | **v1.0.4** | Auto-hide vs. Close isolation | Validated session persistence on blur | Reopening checks `pendingResetPanels` before reset | Production release of dual-lifecycle architecture |
 | **v1.0.5** | Comprehensive systems hardening | Extension panel crashes, rapid-click race, memory leaks | Unchecked `chrome.tabs.discard`, timer desync, uncleaned Sets | Full audit resolution: `isExtensionPanel`, atomic debounce, `onRemoved` listener |
+| **v1.0.6** | Web Panel Shortcut & Submit Fix | `Ctrl+Enter` / `Meta+Enter` failed in Twitter, Claude, ChatGPT | Vivaldi `bundle.js` shortcut hijacking + web panel focus blindspot | Patched passthrough set `f`, patched `handleShortcut` for `#panels`, added capture guard |
 
 ---
 
@@ -110,6 +111,22 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 
 ---
 
+### Iteration 7 (v1.0.6): The Web Panel Keyboard Shortcut & Submit Conspiracy
+* **The Goal**: Allow instant submission shortcuts (e.g. `Ctrl+Enter` on Twitter/X to tweet, `Ctrl+Enter` on ChatGPT/Claude, `Ctrl+Enter` on GitHub comments, Discord, Slack) to work directly inside Web Panels.
+* **What Broke**:
+  - Typing a tweet or prompt inside a Web Panel and pressing `Ctrl+Enter` (or `Cmd+Enter` on macOS) did nothing or triggered browser spatial navigation / mail actions instead of posting the tweet.
+* **Why It Happened (The Autopsy)**:
+  - **Two-Fold Bug in Vivaldi's Core Engine (`bundle.js`)**:
+    1. **Missing Text Passthrough Key**: In module `84451`, Vivaldi maintains `f`, a `Set` of keyboard combinations that are considered text-editing keystrokes (`ctrl+a`, `ctrl+z`, `enter`, `shift+enter`, etc.) and should **never** be intercepted by browser hotkeys. Vivaldi **omitted `ctrl+enter`, `meta+enter`, `ctrl+shift+enter`, and `alt+enter` from `f`**. Thus, `shortcutAllowedInText("ctrl+enter")` returned `true` ("allowed for browser consumption").
+    2. **The Web Panel Focus Blindspot**: In `handleShortcut`, when the focused element was a `<webview>` (`m === "WEBVIEW"`), Vivaldi called `windowPrivate.getFocusedElementInfo(windowId)`. This Chromium private API checks the **main window tab**, *not* the sidebar web panel! Because the background tab was not focused on an input (`editable: false`), Vivaldi evaluated `if (!i || S(r))` as `true`, concluding the user was in an inactive area and executing browser commands over the web panel!
+* **The Engineering Fix**:
+  1. Updated `src/patch-bundle.py` to add `"ctrl+enter"`, `"meta+enter"`, `"ctrl+shift+enter"`, `"meta+shift+enter"`, and `"alt+enter"` to `f`.
+  2. Patched `handleShortcut` in `bundle.js` so when `p?.closest?.("#panels")` is true, text editing shortcuts are never hijacked by outer browser command handlers.
+  3. Added `setupPanelShortcutGuard()` in `src/edge-panel-mod.js` using window capture-phase event propagation control (`e.stopImmediatePropagation()`).
+  4. Added automated regression and simulation test suite in `tests/test_shortcuts.js`.
+
+---
+
 ## 🏆 Current Architecture Summary
 
 ```
@@ -119,6 +136,18 @@ User Action: Click Outside (Blur)
 Panel Slides Away (Visual Only)
        │
        └─► Session Intact • Memory Warm • Instant Multitask Resume
+
+────────────────────────────────────────────────────────────────────────
+
+User Action: Typing in Web Panel (Twitter, ChatGPT, Claude, GitHub)
+       │
+       ▼
+Press [Ctrl + Enter] / [Cmd + Enter]
+       │
+       ├─► 1. setupPanelShortcutGuard captures keydown on window capture phase
+       ├─► 2. bundle.js text passthrough set (f) protects combo from browser hijacking
+       ├─► 3. handleShortcut detects panel webview and yields control
+       └─► 4. Webview receives raw event -> Instant Tweet / Prompt / Comment submission!
 
 ────────────────────────────────────────────────────────────────────────
 

@@ -585,8 +585,43 @@
     }
   }
 
+  // ── Web Panel Shortcut Passthrough & Key Event Guard ─────────────────────────
+  // Prevents Vivaldi UI from swallowing text-editing shortcuts (Ctrl+Enter, Meta+Enter,
+  // Shift+Enter, Ctrl+Shift+Enter) when focus is inside a Web Panel (e.g. Twitter/X
+  // tweet submission, ChatGPT, Claude, GitHub comments, Discord, Slack).
+  let shortcutGuardActive = false;
+  function setupPanelShortcutGuard() {
+    if (shortcutGuardActive) return;
+    shortcutGuardActive = true;
+
+    window.addEventListener('keydown', (e) => {
+      const activeEl = document.activeElement;
+      const target = e.target;
+      const isInsidePanel = Boolean(
+        (activeEl && (activeEl.closest('#panels') || activeEl.closest('.webpanel') || activeEl.tagName === 'WEBVIEW')) ||
+        (target && (target.closest('#panels') || target.closest('.webpanel') || target.tagName === 'WEBVIEW'))
+      );
+
+      if (!isInsidePanel) return;
+
+      const isEnter = e.key === 'Enter' || e.code === 'Enter';
+      const isModifierEnter = isEnter && (e.ctrlKey || e.metaKey || e.shiftKey);
+
+      if (isModifierEnter) {
+        // Stop immediate propagation to outer Vivaldi action dispatchers so the keystroke
+        // is delivered directly into the webview guest process without browser hijacking
+        if (e.stopImmediatePropagation) {
+          e.stopImmediatePropagation();
+        } else {
+          e.stopPropagation();
+        }
+      }
+    }, true);
+  }
+
   // ── Initialization & Scoped Container Watcher ──────────────────────────────
   function scanAndInit() {
+    setupPanelShortcutGuard();
     const panels = getLivePanels();
     if (!panels.length) return false;
     panels.forEach(observePanel);
@@ -602,6 +637,7 @@
   }
 
   function bootstrap() {
+    setupPanelShortcutGuard();
     if (scanAndInit()) return;
 
     const observer = new MutationObserver((_, obs) => {

@@ -3,10 +3,10 @@
 # ⚡ Vivaldi Sidebar Fix: Microsoft Edge-Style AI Workspace
 
 **Turn Vivaldi Web Panels into a blazing-fast, Microsoft Edge Copilot-style flyout sidebar.**  
-*Instant 0.0 MB RAM discard, restored manual close button, 88% full-width expansion, clean base URL reset on close, and glitch-free wakeups.*
+*Instant 0.0 MB RAM discard, restored manual close button, 88% full-width expansion, clean base URL reset on close, Twitter/X & AI submit shortcut passthrough (Ctrl+Enter), and glitch-free wakeups.*
 
 [![CI & Integrity Checks](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml/badge.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml)
-[![Release: v1.0.5](https://img.shields.io/badge/Release-v1.0.5-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
+[![Release: v1.0.6](https://img.shields.io/badge/Release-v1.0.6-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vivaldi: Tested](https://img.shields.io/badge/Vivaldi-7.x%20%7C%208.x-ef3939.svg)](https://vivaldi.com)
 [![Platform: Linux | Windows | macOS | BSD](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20BSD-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)
@@ -23,15 +23,22 @@
 ## 🍼 ELI5: The Problem & The Fix in 30 Seconds
 
 > **Explain Like I'm 5**:  
-> Imagine you open 4 heavy AI apps (ChatGPT, Claude, Gemini, Perplexity) in your sidebar.  
-> - **In Stock Vivaldi**: Clicking outside hides them visually, but their engines keep running full blast in the background, secretly eating **4 Gigabytes of your computer's RAM**. To make matters worse, Vivaldi deletes the **(X) Close** button!
+> Imagine you open 4 heavy AI apps (ChatGPT, Claude, Gemini, Perplexity) or Twitter/X in your sidebar.  
+> - **In Stock Vivaldi**:
+>   1. Clicking outside hides them visually, but their engines keep running full blast in the background, secretly eating **4 Gigabytes of your computer's RAM**.
+>   2. Vivaldi deletes the **(X) Close** button!
+>   3. When you press **Ctrl+Enter** to post a tweet or send a prompt, Vivaldi steals the keystroke and does nothing!
 > - **With This Mod**: 
 >   1. **Clicking Outside (Multitasking)**: The panel simply glides away while keeping your active chat warm and ready.
 >   2. **Clicking [X] (Finished Work)**: The panel closes, wipes its memory down to **0.0 Megabytes**, and cleanly resets to the home page so your next session starts fresh!
+>   3. **Pressing Ctrl+Enter**: Instantly submits tweets, prompts, Discord messages, and GitHub comments without browser interference!
 
 ```mermaid
 flowchart TD
-    A["Open ChatGPT / Claude / Gemini"] --> B{"What action do you take?"}
+    A["Open Twitter / ChatGPT / Claude / Gemini"] --> B{"What action do you take?"}
+
+    B -->|"Press Ctrl+Enter / Cmd+Enter"| J["Text Passthrough Guard"]
+    J --> K["Instant Tweet / Prompt / Comment Sent!"]
 
     B -->|"Click Anywhere Outside (Multitask)"| C["Panel Slides Away"]
     C --> D["Active Session Kept Warm in RAM"]
@@ -52,13 +59,16 @@ If you rely on web panels for AI assistants, stock Vivaldi introduces major road
 ### 1. Missing Close (X) Button on Floating & Auto-Close Panels
 In Vivaldi's core code (`bundle.js`), the `shouldShowCloseButton` logic explicitly **suppresses the close button** whenever both **"Floating Panel"** and **"Auto-close Inactive Panel"** are enabled. Users are forced to hunt for tiny sidebar switcher icons just to close a panel.
 
-### 2. No Web Panel Hibernation: Silent RAM Bleed (3.8 GB+ in Background)
+### 2. The Keyboard Shortcut Interception & Focus Blindspot
+When typing inside a Web Panel (e.g. composing a tweet on Twitter/X or writing a prompt in Claude), pressing `Ctrl+Enter` (or `Cmd+Enter` on Mac) fails because Vivaldi's shortcut dispatcher omits `Ctrl+Enter` from its text-editing passthrough table and checks the background window tab for focus instead of the sidebar webview.
+
+### 3. No Web Panel Hibernation: Silent RAM Bleed (3.8 GB+ in Background)
 While Vivaldi can hibernate normal tabs, **web panels have no hibernation support**. When a panel auto-hides, Vivaldi merely adds `visibility: hidden`. The underlying Chromium `<webview>` processes remain fully alive—maintaining WebSockets, event listeners, and memory heaps. 4 active AI panels routinely hold **3.5 GB to 4.5 GB+ of RAM** indefinitely.
 
-### 3. Artificial 61.8% Golden Ratio & 65vw Panel Width Clamp
+### 4. Artificial 61.8% Golden Ratio & 65vw Panel Width Clamp
 Vivaldi clamps panel dragging to the Golden Ratio (`0.618 * innerWidth` $\approx$ 61.8%) and hardcodes a CSS container ceiling of `65vw`. On wide screens, you cannot expand an AI workspace or coding panel side-by-side.
 
-### 4. Chat Session Amnesia vs. Multitasking Loss
+### 5. Chat Session Amnesia vs. Multitasking Loss
 Stock panels never reset on close. If you open Gemini, write a 20-message chat, and close it, reopening it days later loads the old stale thread instead of a clean prompt. Conversely, naïve reset mods wipe your chat even when you just clicked away to copy a snippet!
 
 ---
@@ -66,6 +76,7 @@ Stock panels never reset on close. If you open Gemini, write a 20-message chat, 
 ## ✨ Features: Microsoft Edge Sidebar Experience for Vivaldi
 
 - 🛑 **Unified Native Close (X) Button**: Restores Vivaldi's crisp native 18x18px `Pe.kze` SVG close button directly into the web panel header.
+- ⌨️ **Instant Submit Shortcuts (`Ctrl+Enter` / `Cmd+Enter`)**: Full passthrough protection for instant post/submit on Twitter/X, ChatGPT, Claude, GitHub comments, Discord, Slack, and Jira.
 - ⚡ **True 0.0 MB RAM Reclamation**: Invokes Chromium's native `chrome.tabs.discard()` on manual close, completely terminating heavy guest renderer processes.
 - 🔄 **Clean Base URL Reset**: Closes panels back to their clean prompt (`gemini.google.com/app`, `claude.ai/new`, `chatgpt.com/`, `grok.com/`, `copilot.microsoft.com/`) on explicit close.
 - 🛡️ **Intelligent Session Preservation**: Clicking outside or toggling the sidebar preserves your active session, drafts, and WebSockets untouched.
@@ -199,9 +210,22 @@ if (isDiscarded && !revivingTabs.has(tabId)) {
 }
 ```
 
+### 4. Text Shortcut Passthrough Guard
+```javascript
+// Intercepts modifier+enter on capturing phase to prevent outer UI hijacking
+window.addEventListener('keydown', (e) => {
+  if (document.activeElement?.closest('#panels') && (e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.stopImmediatePropagation();
+  }
+}, true);
+```
+
 ---
 
 ## ❓ Frequently Asked Questions (FAQ)
+
+### Why didn't `Ctrl+Enter` work in Twitter / ChatGPT previously?
+In stock Vivaldi, the global shortcut dispatcher in `bundle.js` omitted `Ctrl+Enter` and `Meta+Enter` from the text-editing passthrough set (`f`) and checked the background main tab instead of the sidebar panel for focus. This mod patches both issues, allowing instant post/tweet/submit actions to work reliably.
 
 ### Does this work on Windows and Mac?
 **Yes!** Vivaldi is built on the same Chromium + React core across Windows, macOS, Linux, and FreeBSD. The exact same JavaScript mod (`edge-panel-mod.js`) and bundle patches run identically on every operating system. We provide `install.ps1` for Windows, `install.sh` for Linux/macOS/BSD, and `patch-bundle.py` that auto-detects all OS paths.
@@ -248,6 +272,7 @@ Run the automated test suite locally:
 ```bash
 node tests/test_mod.js
 node tests/test_edge_cases.js
+node tests/test_shortcuts.js
 bash -n install.sh
 bash -n uninstall.sh
 python3 -m py_compile src/patch-bundle.py
