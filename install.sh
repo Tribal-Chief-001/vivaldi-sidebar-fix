@@ -77,8 +77,8 @@ APT_HOOK_FILE="/etc/apt/apt.conf.d/99-vivaldi-mod-persistence"
 if [ -d "/etc/apt/apt.conf.d" ] && [ "$EUID" -eq 0 ]; then
     echo "[+] Setting up APT persistence hook at $APT_HOOK_FILE..."
     cat << HOOK_EOF > "$APT_HOOK_FILE"
-// Re-apply Vivaldi Edge Panels mod automatically after package updates
-DPkg::Post-Invoke {"if [ -x $SCRIPT_DIR/install.sh ]; then bash $SCRIPT_DIR/install.sh; fi";};
+// Re-apply Vivaldi Edge Panels mod automatically ONLY when Vivaldi updates
+DPkg::Post-Invoke {"if [ -x $SCRIPT_DIR/install.sh ] && [ -f $VIVALDI_RESOURCE_DIR/window.html ] && ! grep -q 'src=\"edge-panel-mod.js\"' $VIVALDI_RESOURCE_DIR/window.html; then bash $SCRIPT_DIR/install.sh >/dev/null 2>&1; fi";};
 HOOK_EOF
     chmod 644 "$APT_HOOK_FILE"
 fi
@@ -87,10 +87,10 @@ echo ""
 echo "=============================================================================="
 echo "[✓] Installation complete!"
 echo "    - Dedicated close button (X) active"
-echo "    - 0 MB instant RAM discard via chrome.tabs.discard() active"
+echo "    - 0 MB instant RAM reclamation via chrome.tabs.remove() active"
 echo "    - 88% max panel width slider enabled"
 if [ -d "/etc/apt/apt.conf.d" ]; then
-    echo "    - APT persistence hook configured"
+    echo "    - Silent APT update persistence configured"
 fi
 echo ""
 echo "Restart Vivaldi to apply changes:"
