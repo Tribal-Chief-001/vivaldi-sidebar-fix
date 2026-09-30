@@ -70,6 +70,11 @@ if [ -f "$APT_HOOK_FILE" ]; then
     echo "[+] Removing APT persistence hook..."
     rm -f "$APT_HOOK_FILE"
 fi
+PERSIST_BIN="/usr/local/bin/vivaldi-sidebar-mod-persist"
+if [ -f "$PERSIST_BIN" ]; then
+    echo "[+] Removing persistence runner binary..."
+    rm -f "$PERSIST_BIN"
+fi
 
 echo ""
 echo "=============================================================================="

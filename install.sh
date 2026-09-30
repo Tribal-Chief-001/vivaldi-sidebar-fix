@@ -74,11 +74,18 @@ fi
 
 # Step 5: Install APT Post-Invoke hook for update persistence on Debian/Ubuntu/Mint
 APT_HOOK_FILE="/etc/apt/apt.conf.d/99-vivaldi-mod-persistence"
+PERSIST_BIN="/usr/local/bin/vivaldi-sidebar-mod-persist"
 if [ -d "/etc/apt/apt.conf.d" ] && [ "$EUID" -eq 0 ]; then
-    echo "[+] Setting up APT persistence hook at $APT_HOOK_FILE..."
-    cat << HOOK_EOF > "$APT_HOOK_FILE"
-// Re-apply Vivaldi Edge Panels mod automatically ONLY when Vivaldi updates
-DPkg::Post-Invoke {"if [ -x $SCRIPT_DIR/install.sh ] && [ -f $VIVALDI_RESOURCE_DIR/window.html ] && ! grep -q 'src=\"edge-panel-mod.js\"' $VIVALDI_RESOURCE_DIR/window.html; then bash $SCRIPT_DIR/install.sh >/dev/null 2>&1; fi";};
+    echo "[+] Installing persistence runner to $PERSIST_BIN..."
+    cp -f "$SCRIPT_DIR/src/vivaldi-sidebar-mod-persist" "$PERSIST_BIN"
+    sed -i "s|INSTALL_DIR=.*|INSTALL_DIR=\"$SCRIPT_DIR\"|" "$PERSIST_BIN"
+    sed -i "s|VIVALDI_DIR=.*|VIVALDI_DIR=\"$VIVALDI_RESOURCE_DIR\"|" "$PERSIST_BIN"
+    chmod 755 "$PERSIST_BIN"
+
+    echo "[+] Setting up clean APT persistence hook at $APT_HOOK_FILE..."
+    cat << 'HOOK_EOF' > "$APT_HOOK_FILE"
+// Re-apply Vivaldi Edge Panels mod automatically after Vivaldi package updates
+DPkg::Post-Invoke {"/usr/local/bin/vivaldi-sidebar-mod-persist >/dev/null 2>&1 || true";};
 HOOK_EOF
     chmod 644 "$APT_HOOK_FILE"
 fi

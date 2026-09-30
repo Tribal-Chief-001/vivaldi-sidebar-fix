@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Vivaldi Sidebar Mod - Automated Persistence Hook
+# Triggers after any apt/dpkg package manager transaction.
+# Automatically detects if Vivaldi was updated and re-applies patches silently.
+# ==============================================================================
+set -u
+
+INSTALL_DIR="/home/lucifer/Documents/Projects/vivaldi-sidebar-fix"
+VIVALDI_DIR="/opt/vivaldi/resources/vivaldi"
+
+# If Vivaldi is not installed, exit cleanly
+[ -d "$VIVALDI_DIR" ] || exit 0
+[ -f "$VIVALDI_DIR/window.html" ] || exit 0
+[ -f "$VIVALDI_DIR/bundle.js" ] || exit 0
+[ -x "$INSTALL_DIR/install.sh" ] || exit 0
+
+NEEDS_REINSTALL=0
+
+# Check 1: Is edge-panel-mod.js script tag missing from window.html?
+if ! grep -Fq "edge-panel-mod.js" "$VIVALDI_DIR/window.html"; then
+    NEEDS_REINSTALL=1
+# Check 2: Is __edgeCloseWebPanel missing from bundle.js?
+elif ! grep -Fq "__edgeCloseWebPanel" "$VIVALDI_DIR/bundle.js"; then
+    NEEDS_REINSTALL=1
+# Check 3: Is __edgeShouldReset missing from bundle.js?
+elif ! grep -Fq "__edgeShouldReset" "$VIVALDI_DIR/bundle.js"; then
+    NEEDS_REINSTALL=1
+# Check 4: Is 88% width missing from bundle.js?
+elif ! grep -Fq ".880*this.context.innerWidth" "$VIVALDI_DIR/bundle.js"; then
+    NEEDS_REINSTALL=1
+fi
+
+if [ "$NEEDS_REINSTALL" -eq 1 ]; then
+    bash "$INSTALL_DIR/install.sh" >/dev/null 2>&1
+fi
+
+exit 0

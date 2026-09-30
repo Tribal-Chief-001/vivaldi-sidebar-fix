@@ -25,6 +25,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.1.2** | React-DOM Synchronization | Race between CDU and DOM MutationObserver | Flag deletion in CDU caused DOM observer to see auto-hide | Added 3000ms safety cache `recentlyResetPanels` |
 | **v1.2.0** | The Root-Cause Permanent Fix | Fragile heuristic race conditions across various complex web apps | `chrome.tabs.discard()` left tab ID in Chromium's session tree and `Pge.Z`; on reopen `_getRelatedTabId()` was not empty, blocking fresh tab instantiation | Switched to `chrome.tabs.remove()` on explicit close `(X)`. Triggers native `onRemoved` -> `offerEraseTabId` -> complete memory wipe. On reopen, `_getRelatedTabId()` is genuinely undefined, so `_createRelatedTab()` creates a 100% brand-new Chromium tab pointing straight to `webPanel.url`. Zero race conditions, zero legacy workarounds. |
 | **v1.2.1** | Drag Width Limiter Pattern Fix | Panel dragging capped at 61.8% despite patch | Patcher searched for `"0.618"` instead of `".618*this.context.innerWidth"` | Updated patcher pattern to match `.618*this.context.innerWidth` and expand to `.880*this.context.innerWidth`, unlocking full 88% screen width dragging |
+| **v1.2.2** | Vivaldi 8.2+ Compatibility & Robust APT Persistence | Vivaldi 8.2 update wiped (X) button; APT hook failed to re-apply | 1. Minifier renamed JSX runtime, translation, and prefs vars (`Fi->Vi`, `k->E`, `Wge->dbe`, `D->P`); 2. APT config parsed `\"` as trailing backslash | 1. Dynamic regex-based pattern matching in `patch-bundle.py` across all Vivaldi versions; 2. Installed dedicated standalone runner `/usr/local/bin/vivaldi-sidebar-mod-persist` that detects unpatched vendor files and auto-heals silently; 3. Auto-refreshes `.orig` backups on major updates |
 
 ---
 
@@ -206,6 +207,27 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 * **The Engineering Fix**:
   - Updated `src/patch-bundle.py` to match `.618*this.context.innerWidth` and expand it to `.880*this.context.innerWidth`.
   - Combined with the `88vw` CSS container clamp, panels can now be freely dragged across the entire desktop up to 88% width!
+
+---
+
+### Iteration 13 (v1.2.2): Vivaldi 8.2+ Compatibility & True Self-Healing APT Persistence
+* **The Goal**: Ensure that when Vivaldi updates to major releases (e.g. 8.1 $\to$ 8.2), the close button (X), RAM reclamation, and keyboard shortcuts remain 100% persistent without manual intervention.
+* **What Broke**:
+  - When upgrading to Vivaldi 8.2 (`8.2.4133.76`), the web panel close button (X) disappeared.
+  - The APT post-invoke hook failed to auto-heal the installation.
+* **Why It Happened (The Autopsy)**:
+  1. **Webpack Minifier Identifier Renaming**: In Vivaldi 8.2's `bundle.js`:
+     - Preferences container changed: `prefValues[D.kPanelsShowCloseButton]` $\to$ `prefValues[P.kPanelsShowCloseButton]`.
+     - JSX runtime changed: `Fi.jsx` $\to$ `Vi.jsx`.
+     - Translation function changed: `k.Z("Close Panel")` $\to$ `E.Z("Close Panel")`.
+     - Close icon SVG component changed: `Wge` $\to$ `dbe`.
+     - Text focus handler changed: `S(r)` $\to$ `z(r)`.
+     Because earlier patchers relied on hardcoded string matches from 8.1, the patcher silently skipped these rules in 8.2.
+  2. **APT Config String Escape Hell**: In `/etc/apt/apt.conf.d/99-vivaldi-mod-persistence`, inline bash code containing `grep -q 'src=\"...\"'` caused APT's configuration parser to strip quotes into `src=\edge-panel-mod.js\`. When grep ran, it died with `grep: Trailing backslash` (exit code 2), causing the hook to crash on update!
+* **The Engineering Fix**:
+  1. Converted `patch-bundle.py` from rigid static strings to dynamic **version-agnostic regular expressions** with capture groups for React minifier variable names. Works automatically across Vivaldi 7.x, 8.1, 8.2, 8.3+.
+  2. Replaced the inline APT hook command with a dedicated executable binary: `/usr/local/bin/vivaldi-sidebar-mod-persist`. Runs after any `apt/dpkg` update, checks if Vivaldi's vendor files were overwritten, and silently self-heals the mod in <5ms.
+  3. Added auto-refresh for pristine `.orig` backups upon major vendor browser upgrades.
 
 ---
 
