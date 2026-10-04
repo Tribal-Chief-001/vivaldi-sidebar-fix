@@ -542,10 +542,40 @@
     getAll: loadAllPermissions
   };
 
+  // Direct React bridge called from bundle.js WebPanel handleOnPermissionRequest
+  window.__edgeHandlePermissionRequest = function (e, reactInstance) {
+    if (!e) return false;
+    if (e.permission === 'download') return false;
+    if (!SENSITIVE_PERMISSIONS.has(e.permission)) return false;
+
+    if (typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
+
+    const wv = reactInstance?.refWebpanelwebview?.current ||
+               (reactInstance?.nodeRef?.current && reactInstance.nodeRef.current.querySelector('webview')) ||
+               null;
+    const panel = reactInstance?.nodeRef?.current ||
+                  (wv && wv.closest('.panel, .webpanel')) ||
+                  document.querySelector('#panels .webpanel.visible') ||
+                  getLivePanels()[0];
+    const explicitUrl = reactInstance?.props?.webPanel?.url || '';
+
+    handlePermissionRequest(e, wv, panel, explicitUrl);
+    return true;
+  };
+
   function extractOriginAndHost(rawUrl, wv) {
     let target = rawUrl;
     if ((!target || typeof target !== 'string' || !target.trim()) && wv) {
       target = wv.src || (typeof wv.getAttribute === 'function' ? wv.getAttribute('src') : '') || '';
+    }
+    if ((!target || typeof target !== 'string' || !target.trim()) && wv) {
+      const panel = wv.closest && wv.closest('.panel, .webpanel');
+      const rge = panel && getRgeComponent(panel);
+      if (rge?.props?.webPanel?.url) {
+        target = rge.props.webPanel.url;
+      }
     }
 
     let origin = null;
@@ -593,13 +623,17 @@
   }
 
   function attachBannerToPanel(panel, banner) {
+    if (!panel) return;
+    const header = panel.querySelector && panel.querySelector('header.webpanel-header');
     const content = (panel.querySelector && panel.querySelector('section.webpanel-content')) || panel;
-    if (typeof content.prepend === 'function') {
+    if (header && header.nextSibling) {
+      header.parentNode.insertBefore(banner, header.nextSibling);
+    } else if (content && typeof content.prepend === 'function') {
       content.prepend(banner);
-    } else if (content.firstChild) {
+    } else if (content && content.firstChild) {
       content.insertBefore(banner, content.firstChild);
     } else {
-      content.appendChild(banner);
+      panel.appendChild(banner);
     }
   }
 
@@ -740,7 +774,7 @@
     attachBannerToPanel(panel, banner);
   }
 
-  function handlePermissionRequest(e, wv, panel) {
+  function handlePermissionRequest(e, wv, panel, explicitUrl = '') {
     if (!e) return;
 
     // 1. Never interfere with downloads - pass through to Vivaldi's native doDownload handler
@@ -755,10 +789,10 @@
     }
 
     // 4. Guard against extension panels
-    if (isExtensionPanel(panel)) return;
+    if (panel && isExtensionPanel(panel)) return;
 
     // 5. Extract origin and display host
-    const { origin, host } = extractOriginAndHost(e.url, wv);
+    const { origin, host } = extractOriginAndHost(explicitUrl || (e.request && e.request.url) || e.url, wv);
 
     // 6. Check persistence if origin is valid
     if (isSavableOrigin(origin)) {
@@ -774,19 +808,26 @@
     }
 
     // 7. Undecided: check if panel already has an active prompt banner
-    if (panel) {
-      if (panel.__edgeActivePermRequest) {
-        panel.__edgePermQueue = panel.__edgePermQueue || [];
-        panel.__edgePermQueue.push({
+    const targetPanel = panel ||
+                        (wv && wv.closest && wv.closest('.panel, .webpanel, .panel-group, #panels > div')) ||
+                        document.querySelector('#panels .webpanel.visible') ||
+                        document.querySelector('#panels .panel.visible') ||
+                        getLivePanels()[0] ||
+                        document.querySelector('#panels');
+
+    if (targetPanel) {
+      if (targetPanel.__edgeActivePermRequest) {
+        targetPanel.__edgePermQueue = targetPanel.__edgePermQueue || [];
+        targetPanel.__edgePermQueue.push({
           request: e.request,
           origin,
           permission: e.permission,
           displayHost: host,
-          panel
+          panel: targetPanel
         });
         return;
       }
-      showPrompt(panel, e.request, origin, e.permission, host);
+      showPrompt(targetPanel, e.request, origin, e.permission, host);
     }
   }
 
@@ -892,19 +933,60 @@
     }
   }, true);
 
+  function hookAllWebviews() {
+    try {
+      const allWvs = document.querySelectorAll('webview');
+      for (const w of allWvs) {
+        const p = (w.closest && w.closest('.panel, .webpanel')) || w.parentElement;
+        hookWebview(w, p);
+      }
+    } catch (_) {}
+  }
+
   // ── Initialization & Scoped Container Watcher ──────────────────────────────
   function scanAndInit() {
     const panels = getLivePanels();
-    if (!panels.length) return false;
     panels.forEach(observePanel);
+    hookAllWebviews();
 
     const container = document.querySelector('#panels-container') || document.querySelector('#panels') || document.body;
-    new MutationObserver(() => {
-      getLivePanels().forEach(observePanel);
-    }).observe(container, { childList: true, subtree: false });
+    if (container && !container.__edgeContainerObserved) {
+      container.__edgeContainerObserved = true;
+      new MutationObserver(() => {
+        getLivePanels().forEach(observePanel);
+        hookAllWebviews();
+      }).observe(container, { childList: true, subtree: false });
+    }
 
-    return true;
+    return panels.length > 0;
   }
+
+  // Global document-level watcher for newly mounted webviews or panels
+  try {
+    new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'childList') {
+          for (const node of m.addedNodes) {
+            if (node.nodeType === 1) {
+              if (node.tagName === 'WEBVIEW') {
+                const p = (node.closest && node.closest('.panel, .webpanel')) || node.parentElement;
+                hookWebview(node, p);
+              } else if (node.querySelectorAll) {
+                const wvs = node.querySelectorAll('webview');
+                for (const w of wvs) {
+                  const p = (w.closest && w.closest('.panel, .webpanel')) || w.parentElement;
+                  hookWebview(w, p);
+                }
+              }
+              if (node.matches && (node.matches('.panel, .webpanel') || node.classList.contains('webpanel'))) {
+                observePanel(node);
+              }
+            }
+          }
+        }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
 
   function bootstrap() {
     if (scanAndInit()) return;
@@ -913,7 +995,7 @@
       if (scanAndInit()) obs.disconnect();
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {

@@ -27,6 +27,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.2.1** | Drag Width Limiter Pattern Fix | Panel dragging capped at 61.8% despite patch | Patcher searched for `"0.618"` instead of `".618*this.context.innerWidth"` | Updated patcher pattern to match `.618*this.context.innerWidth` and expand to `.880*this.context.innerWidth`, unlocking full 88% screen width dragging |
 | **v1.2.2** | Vivaldi 8.2+ Compatibility & Robust APT Persistence | Vivaldi 8.2 update wiped (X) button; APT hook failed to re-apply | 1. Minifier renamed JSX runtime, translation, and prefs vars (`Fi->Vi`, `k->E`, `Wge->dbe`, `D->P`); 2. APT config parsed `\"` as trailing backslash | 1. Dynamic regex-based pattern matching in `patch-bundle.py` across all Vivaldi versions; 2. Installed dedicated standalone runner `/usr/local/bin/vivaldi-sidebar-mod-persist` that detects unpatched vendor files and auto-heals silently; 3. Auto-refreshes `.orig` backups on major updates |
 | **v1.3.0** | In-Panel Permission Prompt System (R1–R4) & Origin Persistence | Web panels failed to access mic, camera, location, or notifications; requests silently dropped by Chromium | Missing embedder `permissionrequest` handler in Chromium `<webview>` GuestView subsystem (`bundle.js` called `e.preventDefault()` and only handled downloads) | Capture-phase event interception on `<webview>`, native in-panel prompt banner (`.edge-permission-banner`) anchored in `section.webpanel-content`, `e.request.allow()` / `e.request.deny()` protocol forwarding, single-decision guard, clean dismissal on close/navigation, origin persistence in `localStorage['vivaldi_sidebar_permissions']`, and global revocation API (`__edgeRevokePermission`, `__edgeClearAllPermissions`). Zero regression to close button and 0.0 MB RAM teardown. |
+| **v1.3.1** | Direct Bundle Permission Bridge & Recursive Webview Observer | Gemini & ChatGPT mic clicks produced no prompt; permission requests silently dropped | 1. Nested `#panels` subtree caused DOM observer to miss dynamically mounted webviews; 2. Native `handleOnPermissionRequest` swallowed `media` requests before mod observer caught them; 3. `e.url` was undefined on Chromium `<webview>` event | Patched `handleOnPermissionRequest` in `bundle.js` with direct synchronous bridge `window.__edgeHandlePermissionRequest(e, this)`, resolved origin from `e.request.url` and React `props.webPanel.url`, added recursive document-level webview observer, and anchored banner under `header.webpanel-header`. |
 
 ---
 
@@ -260,6 +261,40 @@ This document provides a transparent, low-level technical autopsy of every bug, 
   7. **Clean Dismissal**: If the panel is closed via (X) or the webview navigates/detaches, the banner is cleanly unmounted and pending requests are rejected via `e.request.deny()` to release native Chromium handles.
   8. **Revocation APIs**: Exposes `window.__edgeRevokePermission(origin, permission)` and `window.__edgeClearAllPermissions()` for simple testing and user control.
   9. **100% Zero Regression (R4)**: Verified zero interference with 1-click close (X), 0.0 MB RAM teardown (`chrome.tabs.remove`), blur multitasking memory preservation, 88% width slider, and text shortcuts (`Ctrl+Enter`).
+
+---
+
+### Iteration 12 (v1.3.1): The Silent Microphone Roadblock in Gemini & ChatGPT
+* **The Goal**: Enable microphone voice mode and camera inputs on interactive AI web apps (Gemini, ChatGPT) running inside Vivaldi's sidebar panels.
+* **What Broke**:
+  - Clicking the microphone button in Gemini (`gemini.google.com`) or ChatGPT (`chatgpt.com`) inside the sidebar panel did absolutely nothing.
+  - No permission banner appeared, no Chromium system bubble appeared, and the microphone icon returned to its inactive state immediately.
+* **Why It Happened (The Autopsy)**:
+  1. **Subtree Observer Blindspot**: In Vivaldi 8.2, web panels are nested deep in the DOM hierarchy: `#panels > .panel-group > .panel-collapse-guard > .webpanel-stack > .panel.webpanel > .webpanel-content > webview`. The container observer initialized on `#panels` was configured with `{ childList: true, subtree: false }` for performance. Consequently, dynamically mounted `<webview>` elements inside existing panel groups were never passed to `hookWebview`, leaving them without the capture-phase listener!
+  2. **Unpatched Native Gatekeeper (`pbe.handleOnPermissionRequest`)**: When no mod capture listener was active, Chromium forwarded the event straight to Vivaldi's native React handler:
+     ```javascript
+     handleOnPermissionRequest = e => {
+       if (e.preventDefault(), "download" === e.permission) { ... }
+     }
+     ```
+     Because `"media"` was unhandled, the request was swallowed by native `e.preventDefault()` without ever calling `e.request.allow()`, resulting in immediate `PERMISSION_DENIED_BY_EMBEDDER_CONTEXT`.
+  3. **Chromium Event Data Structure (`e.url` vs `e.request.url`)**: On Chromium `<webview>` elements, the `permissionrequest` event does not store the target URL on `e.url` — it is situated on `e.request.url` or `e.request.origin`. Additionally, Vivaldi panels do not maintain a standard `src` attribute on `<webview>`. Calling `extractOriginAndHost(e.url)` yielded `null`, causing the mod to abort prompt display.
+* **The Engineering Fix**:
+  1. **Direct Synchronous React Bridge (Patch #8)**:
+     Patched `pbe.handleOnPermissionRequest` inside `bundle.js` with an inline hook:
+     ```javascript
+     handleOnPermissionRequest = e => {
+       if (window.__edgeHandlePermissionRequest && window.__edgeHandlePermissionRequest(e, this)) return;
+       if (e.preventDefault(), "download" === e.permission) ...
+     }
+     ```
+     This bridges Vivaldi's native handler directly to `src/edge-panel-mod.js`, passing the exact React component instance (`this`).
+  2. **Multi-Source Origin Extraction**:
+     Updated `extractOriginAndHost` to extract origin from `explicitUrl || (e.request && e.request.url) || e.url || rge.props.webPanel.url`.
+  3. **Defense-in-Depth Recursive Observer**:
+     Added a top-level recursive observer on `document.documentElement` + `hookAllWebviews()` to capture any dynamically spawned `<webview>` elements regardless of virtualization timing.
+  4. **Header Alignment**:
+     Anchored `.edge-permission-banner` immediately after `header.webpanel-header`, preventing any visual obscuration by panel headers.
 
 ---
 

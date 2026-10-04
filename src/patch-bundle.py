@@ -182,6 +182,18 @@ def patch_bundle(bundle_path):
     else:
         print(" -> Note: Rge componentDidUpdate pattern not matched")
 
+    # 8. Bridge Web Panel permission requests to edge-panel-mod
+    target_perm = 'handleOnPermissionRequest=e=>{if(e.preventDefault(),"download"===e.permission)'
+    new_perm = 'handleOnPermissionRequest=e=>{if(window.__edgeHandlePermissionRequest&&window.__edgeHandlePermissionRequest(e,this))return;if(e.preventDefault(),"download"===e.permission)'
+    if target_perm in content:
+        content = content.replace(target_perm, new_perm, 1)
+        print(" -> Patched WebPanel handleOnPermissionRequest to bridge with edge-panel-mod")
+        changes += 1
+    elif '__edgeHandlePermissionRequest' in content:
+        print(" -> WebPanel handleOnPermissionRequest already bridged")
+    else:
+        print(" -> Note: WebPanel handleOnPermissionRequest pattern not matched")
+
     if changes > 0:
         with open(bundle_path, "w", encoding="utf-8") as f:
             f.write(content)
