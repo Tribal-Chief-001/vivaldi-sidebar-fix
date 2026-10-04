@@ -3,10 +3,10 @@
 # ⚡ Vivaldi Sidebar Fix: Microsoft Edge-Style AI Workspace
 
 **Turn Vivaldi Web Panels into a blazing-fast, Microsoft Edge Copilot-style flyout sidebar.**  
-*Instant 0.0 MB RAM reclamation, restored native close button, 88% full-width expansion, clean homepage reset on close, Twitter/X & AI submit shortcut passthrough (Ctrl+Enter), and silent APT update persistence.*
+*Instant 0.0 MB RAM reclamation, in-panel permission prompts (Microphone/Camera/Location/Notifications), restored native close button, 88% full-width expansion, clean homepage reset on close, Twitter/X & AI submit shortcut passthrough (Ctrl+Enter), and silent APT update persistence.*
 
 [![CI & Integrity Checks](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml/badge.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/actions/workflows/ci.yml)
-[![Release: v1.2.2](https://img.shields.io/badge/Release-v1.2.2-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
+[![Release: v1.3.0](https://img.shields.io/badge/Release-v1.3.0-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Vivaldi: Tested](https://img.shields.io/badge/Vivaldi-7.x%20%7C%208.x-ef3939.svg)](https://vivaldi.com)
 [![Platform: Linux | Windows | macOS | BSD](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20BSD-blue.svg)](https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix)
@@ -50,6 +50,7 @@ git clone https://github.com/Tribal-Chief-001/vivaldi-sidebar-fix.git; cd vivald
 | **Multitasking (Click Outside)** | ⚠️ Keeps full memory load active | 🛡️ **Preserved**: Keeps active chat warm in RAM for instant resume | Never lose drafts or code snippets when switching windows |
 | **Reopen Behavior** | ❌ Reopens stale old chat threads and deep article links | 🔄 **Fresh Tab**: Creates a pristine Chromium tab at your clean Home URL | Every session starts at a clean prompt with zero race conditions |
 | **Submit Shortcuts (`Ctrl+Enter`)** | ❌ **Hijacked**: Browser hotkey dispatcher steals keystroke | ⌨️ **Native Passthrough**: Delivered directly to webview | Instantly post tweets on Twitter/X and submit prompts on ChatGPT/Claude |
+| **Site Device Permissions** | ❌ **Silently Dropped**: Chromium denies mic/cam/geo with `PERMISSION_DENIED_BY_EMBEDDER_CONTEXT` | 🎙️ **In-Panel Prompts**: Native flyout banner with 1-click Allow/Block + origin persistence | Full support for Gemini Live, ChatGPT Voice, Google Meet, and location services |
 | **Maximum Drag Width** | ❌ Clamped to Golden Ratio (`61.8%`) and `65vw` | 📐 **Expanded to 88%**: Drag slider across `88vw` of screen width | True side-by-side split screen for coding, reading, and research |
 | **Surviving Browser Updates** | ❌ Mods wiped whenever `apt upgrade` updates Vivaldi | 🛡️ **Self-Healing**: Dedicated `/usr/local/bin` runner auto-heals silently | Zero manual maintenance across Vivaldi 7.x, 8.1, 8.2, and beyond |
 
@@ -80,6 +81,19 @@ If you arrived here searching for any of the following Vivaldi frustrations, her
 ### 5. "Why can't I drag the web panel wider than 60% of my screen?"
 * **Root Cause**: Vivaldi clamps panel dragging to the Golden Ratio (`.618 * innerWidth`) and sets a container CSS max-width of `65vw`.
 * **The Fix**: Patches `limitPanelWidth` to `.880 * innerWidth` and expands the container CSS ceiling to `88vw`, allowing you to drag panels across **88% of your monitor width**.
+
+### 6. "Why do microphone, camera, or location requests fail silently inside web panels?"
+* **Root Cause**: Chromium `<webview>` instances run in a restricted GuestView context. When a guest page requests device access via `navigator.mediaDevices.getUserMedia()`, `navigator.geolocation`, or `Notification.requestPermission()`, Chromium dispatches a `permissionrequest` event to the host embedder. Because stock Vivaldi's WebPanel component (`bundle.js`) calls `e.preventDefault()` and only handles downloads, all sensitive device requests are permanently dropped with `PERMISSION_DENIED_BY_EMBEDDER_CONTEXT`.
+* **The Fix**: Intercepts `permissionrequest` in the capture phase on sidebar `<webview>` elements, renders a native Vivaldi-styled in-panel prompt banner, executes `e.request.allow()` or `e.request.deny()`, and caches user choices by domain origin in `localStorage['vivaldi_sidebar_permissions']` for instant recall with zero repeat prompts.
+
+```text
+┌────────────────────────────────────────────────────────┐
+│ 🌐 gemini.google.com wants to access Microphone & Camera│
+│                                                        │
+│                       [ Block ]  [ Allow ]             │
+└────────────────────────────────────────────────────────┘
+│ <webview content: live AI voice / WebRTC session>     │
+```
 
 ---
 
@@ -202,13 +216,23 @@ In stock Vivaldi, the global shortcut dispatcher in `bundle.js` omitted `Ctrl+En
 - **Linux (Debian/Ubuntu/Mint)**: `install.sh` configures a dedicated `/usr/local/bin/vivaldi-sidebar-mod-persist` runner triggered by `/etc/apt/apt.conf.d/99-vivaldi-mod-persistence`. Whenever `apt upgrade` updates Vivaldi, the mod silently re-applies itself in <5ms.
 - **Windows / macOS / Arch / Fedora**: Whenever Vivaldi updates to a new major version, simply run `.\install.ps1` (Windows) or `sudo bash install.sh` (Mac/Linux).
 
+### How are web panel permissions saved and remembered?
+Permissions are saved per domain origin (`protocol://host:port`) in `window.localStorage['vivaldi_sidebar_permissions']`. Once you grant or block a site (e.g. `https://gemini.google.com`), your decision persists across panel closures, browser restarts, and tab resets. Non-HTTP schemes (`about:blank`, `data:`) are never stored.
+
+### How do I reset or revoke permissions granted to a web panel site?
+Open Vivaldi Developer Tools (`Ctrl+Shift+I` / `Cmd+Option+I` on the main browser window):
+- To revoke a single site's permission: `__edgeRevokePermission('https://gemini.google.com', 'media')`
+- To reset all stored permissions: `__edgeClearAllPermissions()`
+The next time the site requests the device, the in-panel prompt banner will appear again.
+
 ---
 
 ## 🤝 Validation & Automated Test Suite
 
-Every commit is verified against our automated test suite covering unit behavior, Chromium edge cases, and shortcut passthrough:
+Every commit is verified against our automated test suite covering unit behavior, Chromium edge cases, permission interception, and shortcut passthrough:
 
 ```bash
+node tests/test_permissions.js
 node tests/test_mod.js
 node tests/test_edge_cases.js
 node tests/test_shortcuts.js
@@ -221,5 +245,5 @@ python3 -m py_compile src/patch-bundle.py
 
 ## 📜 License & Ledger
 
-- **Detailed Fix Autopsy**: Read [CHANGELOG.md](CHANGELOG.md) for the complete chronological engineering ledger detailing every bug, autopsy, and fix from v1.0.0 through v1.2.2.
+- **Detailed Fix Autopsy**: Read [CHANGELOG.md](CHANGELOG.md) for the complete chronological engineering ledger detailing every bug, autopsy, and fix from v1.0.0 through v1.3.0.
 - **License**: Distributed under the [MIT License](LICENSE). Copyright © 2026 Tribal-Chief-001.

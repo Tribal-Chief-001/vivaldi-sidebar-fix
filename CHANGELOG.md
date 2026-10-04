@@ -26,6 +26,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.2.0** | The Root-Cause Permanent Fix | Fragile heuristic race conditions across various complex web apps | `chrome.tabs.discard()` left tab ID in Chromium's session tree and `Pge.Z`; on reopen `_getRelatedTabId()` was not empty, blocking fresh tab instantiation | Switched to `chrome.tabs.remove()` on explicit close `(X)`. Triggers native `onRemoved` -> `offerEraseTabId` -> complete memory wipe. On reopen, `_getRelatedTabId()` is genuinely undefined, so `_createRelatedTab()` creates a 100% brand-new Chromium tab pointing straight to `webPanel.url`. Zero race conditions, zero legacy workarounds. |
 | **v1.2.1** | Drag Width Limiter Pattern Fix | Panel dragging capped at 61.8% despite patch | Patcher searched for `"0.618"` instead of `".618*this.context.innerWidth"` | Updated patcher pattern to match `.618*this.context.innerWidth` and expand to `.880*this.context.innerWidth`, unlocking full 88% screen width dragging |
 | **v1.2.2** | Vivaldi 8.2+ Compatibility & Robust APT Persistence | Vivaldi 8.2 update wiped (X) button; APT hook failed to re-apply | 1. Minifier renamed JSX runtime, translation, and prefs vars (`Fi->Vi`, `k->E`, `Wge->dbe`, `D->P`); 2. APT config parsed `\"` as trailing backslash | 1. Dynamic regex-based pattern matching in `patch-bundle.py` across all Vivaldi versions; 2. Installed dedicated standalone runner `/usr/local/bin/vivaldi-sidebar-mod-persist` that detects unpatched vendor files and auto-heals silently; 3. Auto-refreshes `.orig` backups on major updates |
+| **v1.3.0** | In-Panel Permission Prompt System (R1–R4) & Origin Persistence | Web panels failed to access mic, camera, location, or notifications; requests silently dropped by Chromium | Missing embedder `permissionrequest` handler in Chromium `<webview>` GuestView subsystem (`bundle.js` called `e.preventDefault()` and only handled downloads) | Capture-phase event interception on `<webview>`, native in-panel prompt banner (`.edge-permission-banner`) anchored in `section.webpanel-content`, `e.request.allow()` / `e.request.deny()` protocol forwarding, single-decision guard, clean dismissal on close/navigation, origin persistence in `localStorage['vivaldi_sidebar_permissions']`, and global revocation API (`__edgeRevokePermission`, `__edgeClearAllPermissions`). Zero regression to close button and 0.0 MB RAM teardown. |
 
 ---
 
@@ -227,7 +228,38 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 * **The Engineering Fix**:
   1. Converted `patch-bundle.py` from rigid static strings to dynamic **version-agnostic regular expressions** with capture groups for React minifier variable names. Works automatically across Vivaldi 7.x, 8.1, 8.2, 8.3+.
   2. Replaced the inline APT hook command with a dedicated executable binary: `/usr/local/bin/vivaldi-sidebar-mod-persist`. Runs after any `apt/dpkg` update, checks if Vivaldi's vendor files were overwritten, and silently self-heals the mod in <5ms.
-  3. Added auto-refresh for pristine `.orig` backups upon major vendor browser upgrades.
+   3. Added auto-refresh for pristine `.orig` backups upon major vendor browser upgrades.
+
+---
+
+### Iteration 14 (v1.3.0): In-Panel Permission System & GuestView Security Handshake
+* **The Goal**: Enable rich hardware-access web applications inside Vivaldi Web Panels—specifically Gemini Live Voice, ChatGPT Voice, Google Meet, Zoom, Slack audio/video, and Google Maps location services—by intercepting sensitive device requests and providing native in-panel user prompts.
+* **What Broke**:
+  - Whenever guest pages requested Microphone & Camera (`navigator.mediaDevices.getUserMedia`), Geolocation (`navigator.geolocation`), or Notifications (`Notification.requestPermission`), the request either hung indefinitely or instantly failed with `NotAllowedError` / `PERMISSION_DENIED_BY_EMBEDDER_CONTEXT`.
+  - No permission bubble or dialog was ever shown to the user.
+* **Why It Happened (The Autopsy)**:
+  - **The Dead End in `bundle.js`**: In Vivaldi's core WebPanel component (`pbe` / `Rge`), event listeners are attached to the `<webview>` element. Its permission handler was:
+    ```javascript
+    handleOnPermissionRequest = e => {
+      if (e.preventDefault(), "download" === e.permission)
+        Me.Z.doDownload(e, this.context, this.refWebpanelwebview.current)
+    };
+    ```
+    1. Vivaldi called `e.preventDefault()`, stopping Chromium from executing synchronous default handling and binding the request object to V8 Garbage Collection.
+    2. If `e.permission === "download"`, it forwarded the event to `doDownload()`.
+    3. **For all other permissions (`media`, `geolocation`, `notifications`), Vivaldi did NOTHING.** It never called `e.request.allow()` or `e.request.deny()`.
+  - **The Chromium C++ Sandbox Guard (`web_view_permission_helper.cc`)**:
+    In Chromium's GuestView engine, sensitive permissions have `allowed_by_default = false`. When an unhandled request times out or is deferred, Chromium rejects it with `MediaStreamRequestResult::PERMISSION_DENIED_BY_EMBEDDER_CONTEXT`. Because web panels have no URL address bar or native permission bubbles, guest pages remained permanently locked out of device hardware.
+* **The Engineering Solution**:
+  1. **Capture-Phase Interception**: Added `permissionrequest` event listener with `useCapture: true` on `<webview>` instances inside `src/edge-panel-mod.js`. Runs before Vivaldi's non-capturing handler.
+  2. **Safe Download Passthrough**: For `e.permission === 'download'`, the mod passes the event through untouched without calling `preventDefault()` or `stopPropagation()`, allowing Vivaldi's native `doDownload` handler to function.
+  3. **Sensitive Event Deferral**: For `media`, `geolocation`, and `notifications`, calls `e.preventDefault()` to hold the IPC channel open in Chromium's pending table.
+  4. **Origin Persistence (`localStorage['vivaldi_sidebar_permissions']`)**: Normalizes requesting origins (`protocol://hostname[:port]`). If a decision was previously stored (`'allow'` or `'block'`), immediately invokes `e.request.allow()` or `e.request.deny()` with zero repeat prompting.
+  5. **Interactive In-Panel UI Banner (`.edge-permission-banner`)**: Renders a floating, theme-adaptive banner anchored in `section.webpanel-content`. Displays domain origin and human-readable resource labels ("Microphone & Camera", "Location", "Notifications").
+  6. **Single-Decision & Concurrency Guards**: Action buttons `[ Allow ]` and `[ Block ]` stop click propagation (`e.stopPropagation()`) and are guarded against re-entrant double clicks, preventing Chromium's `Error: Action already taken`. Multiple requests on the same panel are cleanly queued.
+  7. **Clean Dismissal**: If the panel is closed via (X) or the webview navigates/detaches, the banner is cleanly unmounted and pending requests are rejected via `e.request.deny()` to release native Chromium handles.
+  8. **Revocation APIs**: Exposes `window.__edgeRevokePermission(origin, permission)` and `window.__edgeClearAllPermissions()` for simple testing and user control.
+  9. **100% Zero Regression (R4)**: Verified zero interference with 1-click close (X), 0.0 MB RAM teardown (`chrome.tabs.remove`), blur multitasking memory preservation, 88% width slider, and text shortcuts (`Ctrl+Enter`).
 
 ---
 
@@ -263,11 +295,28 @@ Press [Ctrl + Enter] / [Shift + Enter] / [Enter]
 
 ────────────────────────────────────────────────────────────────────────
 
+Guest Page Action: Requests Hardware (Mic, Camera, Geolocation, Notifications)
+       │
+       ▼
+Chromium <webview> fires 'permissionrequest'
+       │
+       ├─► 1. If download: Pass through untouched -> Vivaldi native doDownload
+       ├─► 2. If cached in localStorage['vivaldi_sidebar_permissions']:
+       │         └─► 'allow' -> e.request.allow() | 'block' -> e.request.deny() (0 repeat prompts!)
+       └─► 3. If undecided:
+                 ├─► e.preventDefault() holds Chromium IPC channel open
+                 ├─► Render .edge-permission-banner in section.webpanel-content
+                 ├─► User clicks [ Allow ]: e.request.allow() + persist 'allow' + dismiss
+                 └─► User clicks [ Block ]: e.request.deny() + persist 'block' + dismiss
+
+────────────────────────────────────────────────────────────────────────
+
 User Action: Click Dedicated [X] Button (Any Web Panel in Vivaldi)
        │
-       ├─► 1. Record panel ID in closedPanelsForReset
-       ├─► 2. Slide panel closed (150ms glide animation)
-       └─► 3. chrome.tabs.remove(tabId) -> complete tab destruction
+       ├─► 1. Clean up active permission prompts (request.deny() to release handles)
+       ├─► 2. Record panel ID in closedPanelsForReset
+       ├─► 3. Slide panel closed (150ms glide animation)
+       └─► 4. chrome.tabs.remove(tabId) -> complete tab destruction
                │
                ├─► Chromium fires chrome.tabs.onRemoved
                └─► Vivaldi internal pe() handler triggers Pge.Z.offerEraseTabId()

@@ -230,6 +230,9 @@
 
     log('Edge Close (X) triggered — will destroy tab and flag for fresh creation');
 
+    // Dismiss active permission prompts and deny pending requests on close
+    dismissAllPanelPrompts(panel, true);
+
     const panelId = getPanelId(panel);
 
     // Flag this panel so __edgeShouldReset returns true on reopen
@@ -261,8 +264,9 @@
       // Flag for fresh tab creation on reopen
       if (panelId) closedPanelsForReset.add(panelId);
 
-      // Close the panel UI
+      // Dismiss active permission prompts on native close
       if (domPanel) {
+        dismissAllPanelPrompts(domPanel, true);
         closeActivePanel(domPanel);
       } else {
         closeActivePanel();
@@ -353,6 +357,474 @@
     }
   }
 
+  // =============================================================================
+  // In-Panel Permission Prompt Subsystem (R1, R2, R3)
+  // =============================================================================
+  const PERM_STORAGE_KEY = 'vivaldi_sidebar_permissions';
+  const SENSITIVE_PERMISSIONS = new Set(['media', 'geolocation', 'notifications', 'notification']);
+  const memoryStore = new Map();
+
+  const PERMISSION_CSS = [
+    '.edge-permission-banner {',
+    '  position: absolute;',
+    '  top: 0;',
+    '  left: 0;',
+    '  right: 0;',
+    '  z-index: 9999;',
+    '  display: flex;',
+    '  align-items: center;',
+    '  justify-content: space-between;',
+    '  gap: 8px;',
+    '  padding: 8px 12px;',
+    '  background: var(--colorBgAlphaBlur, var(--colorBg, #252830));',
+    '  backdrop-filter: blur(16px);',
+    '  -webkit-backdrop-filter: blur(16px);',
+    '  border-bottom: 1px solid var(--colorBorder, rgba(255, 255, 255, 0.12));',
+    '  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);',
+    '  color: var(--colorFg, #d8dee9);',
+    '  font-size: 12px;',
+    '  font-family: inherit;',
+    '  box-sizing: border-box;',
+    '}',
+    '.edge-perm-text {',
+    '  flex: 1;',
+    '  overflow: hidden;',
+    '  text-overflow: ellipsis;',
+    '  white-space: nowrap;',
+    '  font-size: 12px;',
+    '}',
+    '.edge-perm-actions {',
+    '  display: flex;',
+    '  align-items: center;',
+    '  gap: 6px;',
+    '  flex-shrink: 0;',
+    '}',
+    '.edge-perm-btn {',
+    '  border: 1px solid var(--colorBorder, rgba(255, 255, 255, 0.15));',
+    '  border-radius: 4px;',
+    '  padding: 4px 10px;',
+    '  font-size: 11px;',
+    '  font-weight: 500;',
+    '  cursor: pointer;',
+    '}',
+    '.edge-perm-allow {',
+    '  background: var(--colorHighlightBg, #0078d4);',
+    '  color: var(--colorHighlightFg, #ffffff);',
+    '  border-color: transparent;',
+    '}',
+    '.edge-perm-block {',
+    '  background: var(--colorBtnBg, rgba(255, 255, 255, 0.1));',
+    '  color: var(--colorFg, #d8dee9);',
+    '}'
+  ].join('\n');
+
+  function ensurePermissionStyles() {
+    try {
+      if (!document.querySelector('#edge-permission-style')) {
+        const headOrBody = document.head || document.body;
+        if (headOrBody) {
+          const style = document.createElement('style');
+          style.id = 'edge-permission-style';
+          style.textContent = PERMISSION_CSS;
+          headOrBody.appendChild(style);
+        }
+      }
+    } catch (_) {}
+  }
+
+  function getStorage() {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) {
+        return localStorage;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function loadAllPermissions() {
+    const storage = getStorage();
+    if (storage) {
+      try {
+        const raw = storage.getItem(PERM_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+        return {};
+      } catch (_) {
+        return {};
+      }
+    }
+    const mem = memoryStore.get(PERM_STORAGE_KEY);
+    return mem ? { ...mem } : {};
+  }
+
+  function saveAllPermissions(data) {
+    const storage = getStorage();
+    if (storage) {
+      try {
+        storage.setItem(PERM_STORAGE_KEY, JSON.stringify(data));
+        return;
+      } catch (_) {}
+    }
+    memoryStore.set(PERM_STORAGE_KEY, data);
+  }
+
+  function isSavableOrigin(origin) {
+    if (!origin || typeof origin !== 'string') return false;
+    if (origin === 'null' || origin === 'about:blank') return false;
+    return /^https?:\/\//i.test(origin);
+  }
+
+  function getStoredPermission(origin, permission) {
+    if (!isSavableOrigin(origin)) return null;
+    const data = loadAllPermissions();
+    const originEntry = data[origin];
+    if (!originEntry || typeof originEntry !== 'object') return null;
+    const permVal = originEntry[permission];
+    if (!permVal) return null;
+    if (typeof permVal === 'string') return permVal.toLowerCase();
+    if (typeof permVal === 'object') return (permVal.decision || permVal.state || '').toLowerCase();
+    return null;
+  }
+
+  function setStoredPermission(origin, permission, decision) {
+    if (!isSavableOrigin(origin)) return;
+    const data = loadAllPermissions();
+    if (!data[origin] || typeof data[origin] !== 'object') {
+      data[origin] = {};
+    }
+    data[origin][permission] = decision;
+    saveAllPermissions(data);
+  }
+
+  function revokeStoredPermission(origin, permission) {
+    if (!origin) return;
+    const data = loadAllPermissions();
+    if (data[origin] && typeof data[origin] === 'object') {
+      if (permission) {
+        delete data[origin][permission];
+        if (Object.keys(data[origin]).length === 0) {
+          delete data[origin];
+        }
+      } else {
+        delete data[origin];
+      }
+      saveAllPermissions(data);
+    }
+  }
+
+  function clearAllStoredPermissions() {
+    const storage = getStorage();
+    if (storage) {
+      try {
+        storage.removeItem(PERM_STORAGE_KEY);
+      } catch (_) {}
+    }
+    memoryStore.delete(PERM_STORAGE_KEY);
+  }
+
+  // Global APIs for debugging, user revocation, and test suites
+  window.__edgeRevokePermission = function (origin, permission) {
+    revokeStoredPermission(origin, permission);
+  };
+
+  window.__edgeClearAllPermissions = function () {
+    clearAllStoredPermissions();
+  };
+
+  window.__edgePanelPermissions = {
+    get: getStoredPermission,
+    set: setStoredPermission,
+    revoke: revokeStoredPermission,
+    clear: clearAllStoredPermissions,
+    getAll: loadAllPermissions
+  };
+
+  function extractOriginAndHost(rawUrl, wv) {
+    let target = rawUrl;
+    if ((!target || typeof target !== 'string' || !target.trim()) && wv) {
+      target = wv.src || (typeof wv.getAttribute === 'function' ? wv.getAttribute('src') : '') || '';
+    }
+
+    let origin = null;
+    let host = '';
+
+    if (target && typeof target === 'string') {
+      try {
+        const parsed = new URL(target);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          origin = parsed.origin;
+          host = parsed.hostname || parsed.host || parsed.origin;
+        } else if (parsed.protocol) {
+          host = target;
+        }
+      } catch (_) {
+        host = target;
+      }
+    }
+
+    return { origin, host: host || 'this site' };
+  }
+
+  function getResourceLabel(permission) {
+    switch (permission) {
+      case 'media':
+        return 'Microphone & Camera';
+      case 'geolocation':
+        return 'Location';
+      case 'notifications':
+      case 'notification':
+        return 'Notifications';
+      default:
+        return permission;
+    }
+  }
+
+  function safeRespond(request, allow) {
+    if (!request) return;
+    try {
+      if (allow) request.allow();
+      else request.deny();
+    } catch (err) {
+      warn('Safe respond error:', err);
+    }
+  }
+
+  function attachBannerToPanel(panel, banner) {
+    const content = (panel.querySelector && panel.querySelector('section.webpanel-content')) || panel;
+    if (typeof content.prepend === 'function') {
+      content.prepend(banner);
+    } else if (content.firstChild) {
+      content.insertBefore(banner, content.firstChild);
+    } else {
+      content.appendChild(banner);
+    }
+  }
+
+  function dismissAllPanelPrompts(panel, andDeny = true) {
+    if (!panel) return;
+    if (panel.__edgeActivePermRequest) {
+      const active = panel.__edgeActivePermRequest;
+      if (andDeny) {
+        active.dismissAndDeny();
+      } else {
+        active.banner.remove();
+        panel.__edgeActivePermRequest = null;
+      }
+    } else {
+      const stray = panel.querySelector ? panel.querySelector('.edge-permission-banner') : null;
+      if (stray) stray.remove();
+    }
+
+    if (panel.__edgePermQueue && panel.__edgePermQueue.length > 0) {
+      if (andDeny) {
+        for (const item of panel.__edgePermQueue) {
+          try { item.request.deny(); } catch (_) {}
+        }
+      }
+      panel.__edgePermQueue = [];
+    }
+  }
+
+  function processNextQueued(panel) {
+    if (!panel || panel.__edgeActivePermRequest) return;
+    if (!panel.__edgePermQueue || panel.__edgePermQueue.length === 0) return;
+    const next = panel.__edgePermQueue.shift();
+    if (isSavableOrigin(next.origin)) {
+      const cached = getStoredPermission(next.origin, next.permission);
+      if (cached === 'allow') {
+        safeRespond(next.request, true);
+        processNextQueued(panel);
+        return;
+      }
+      if (cached === 'block' || cached === 'deny') {
+        safeRespond(next.request, false);
+        processNextQueued(panel);
+        return;
+      }
+    }
+    showPrompt(panel, next.request, next.origin, next.permission, next.displayHost);
+  }
+
+  function showPrompt(panel, request, origin, permission, displayHost) {
+    ensurePermissionStyles();
+
+    const banner = document.createElement('div');
+    banner.className = 'edge-permission-banner';
+    banner.setAttribute('data-origin', origin || '');
+    banner.setAttribute('data-permission', permission);
+
+    const textEl = document.createElement('div');
+    textEl.className = 'edge-perm-text';
+    textEl.textContent = `${displayHost} wants to access ${getResourceLabel(permission)}`;
+    banner.appendChild(textEl);
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'edge-perm-actions';
+
+    const blockBtn = document.createElement('button');
+    blockBtn.type = 'button';
+    blockBtn.className = 'edge-perm-btn edge-perm-block';
+    blockBtn.setAttribute('data-action', 'block');
+    blockBtn.textContent = 'Block';
+    actionsEl.appendChild(blockBtn);
+
+    const allowBtn = document.createElement('button');
+    allowBtn.type = 'button';
+    allowBtn.className = 'edge-perm-btn edge-perm-allow';
+    allowBtn.setAttribute('data-action', 'allow');
+    allowBtn.textContent = 'Allow';
+    actionsEl.appendChild(allowBtn);
+
+    banner.appendChild(actionsEl);
+
+    let handled = false;
+    const activeRecord = {
+      request,
+      origin,
+      permission,
+      banner,
+      resolve(allow) {
+        if (handled) return;
+        handled = true;
+        try {
+          if (allow) request.allow();
+          else request.deny();
+        } catch (err) {
+          warn('Permission action error:', err);
+        }
+        if (isSavableOrigin(origin)) {
+          setStoredPermission(origin, permission, allow ? 'allow' : 'block');
+        }
+        banner.remove();
+        panel.__edgeActivePermRequest = null;
+        processNextQueued(panel);
+      },
+      dismissAndDeny() {
+        if (handled) return;
+        handled = true;
+        try {
+          request.deny();
+        } catch (_) {}
+        banner.remove();
+        panel.__edgeActivePermRequest = null;
+      }
+    };
+
+    panel.__edgeActivePermRequest = activeRecord;
+
+    allowBtn.addEventListener('click', (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      }
+      allowBtn.disabled = true;
+      blockBtn.disabled = true;
+      activeRecord.resolve(true);
+    });
+
+    blockBtn.addEventListener('click', (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      }
+      allowBtn.disabled = true;
+      blockBtn.disabled = true;
+      activeRecord.resolve(false);
+    });
+
+    attachBannerToPanel(panel, banner);
+  }
+
+  function handlePermissionRequest(e, wv, panel) {
+    if (!e) return;
+
+    // 1. Never interfere with downloads - pass through to Vivaldi's native doDownload handler
+    if (e.permission === 'download') return;
+
+    // 2. Only intercept sensitive device permissions (media, geolocation, notifications)
+    if (!SENSITIVE_PERMISSIONS.has(e.permission)) return;
+
+    // 3. Prevent Chromium auto-denial
+    if (typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
+
+    // 4. Guard against extension panels
+    if (isExtensionPanel(panel)) return;
+
+    // 5. Extract origin and display host
+    const { origin, host } = extractOriginAndHost(e.url, wv);
+
+    // 6. Check persistence if origin is valid
+    if (isSavableOrigin(origin)) {
+      const cached = getStoredPermission(origin, e.permission);
+      if (cached === 'allow') {
+        safeRespond(e.request, true);
+        return;
+      }
+      if (cached === 'block' || cached === 'deny') {
+        safeRespond(e.request, false);
+        return;
+      }
+    }
+
+    // 7. Undecided: check if panel already has an active prompt banner
+    if (panel) {
+      if (panel.__edgeActivePermRequest) {
+        panel.__edgePermQueue = panel.__edgePermQueue || [];
+        panel.__edgePermQueue.push({
+          request: e.request,
+          origin,
+          permission: e.permission,
+          displayHost: host,
+          panel
+        });
+        return;
+      }
+      showPrompt(panel, e.request, origin, e.permission, host);
+    }
+  }
+
+  function hookWebview(wv, panel) {
+    if (!wv || wv.__edgePermHooked) return;
+    wv.__edgePermHooked = true;
+
+    // Intercept permissionrequest on webview in capture phase
+    wv.addEventListener('permissionrequest', (e) => {
+      const currentPanel = panel || (wv.closest && wv.closest('.panel, .webpanel, #panels > div')) || getLivePanels()[0];
+      handlePermissionRequest(e, wv, currentPanel);
+    }, true);
+
+    // Watch for webview src changes to dismiss active prompt
+    try {
+      new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          if (m.type === 'attributes' && m.attributeName === 'src') {
+            const currentPanel = panel || (wv.closest && wv.closest('.panel, .webpanel, #panels > div')) || getLivePanels()[0];
+            dismissAllPanelPrompts(currentPanel, true);
+          }
+        }
+      }).observe(wv, { attributes: true, attributeFilter: ['src'] });
+    } catch (_) {}
+  }
+
+  function hookPanelWebviews(panel) {
+    if (!panel) return;
+    if (panel.querySelectorAll) {
+      const webviews = panel.querySelectorAll('webview');
+      for (const wv of webviews) {
+        hookWebview(wv, panel);
+      }
+    }
+    const singleWv = panel.querySelector ? panel.querySelector('webview') : null;
+    if (singleWv) hookWebview(singleWv, panel);
+  }
+
   // ── Panel Visibility Observation ───────────────────────────────────────────
   function handleVisibilityChange(panel) {
     const isVisible = panel.classList.contains('visible');
@@ -371,6 +843,35 @@
 
     new MutationObserver(() => handleVisibilityChange(panel))
       .observe(panel, { attributes: true, attributeFilter: ['class'] });
+
+    // Watch for webview additions and removals inside panel
+    try {
+      new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          if (m.type === 'childList') {
+            if (m.addedNodes && m.addedNodes.length) {
+              for (const node of m.addedNodes) {
+                if (node.tagName === 'WEBVIEW') {
+                  hookWebview(node, panel);
+                } else if (node.querySelectorAll) {
+                  const wvs = node.querySelectorAll('webview');
+                  for (const w of wvs) hookWebview(w, panel);
+                }
+              }
+            }
+            if (m.removedNodes && m.removedNodes.length) {
+              for (const node of m.removedNodes) {
+                if (node.tagName === 'WEBVIEW' || (node.querySelector && node.querySelector('webview'))) {
+                  dismissAllPanelPrompts(panel, true);
+                }
+              }
+            }
+          }
+        }
+      }).observe(panel, { childList: true, subtree: true });
+    } catch (_) {}
+
+    hookPanelWebviews(panel);
 
     if (panel.classList.contains('visible')) {
       setupCloseButton(panel);
