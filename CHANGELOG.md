@@ -28,6 +28,7 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 | **v1.2.2** | Vivaldi 8.2+ Compatibility & Robust APT Persistence | Vivaldi 8.2 update wiped (X) button; APT hook failed to re-apply | 1. Minifier renamed JSX runtime, translation, and prefs vars (`Fi->Vi`, `k->E`, `Wge->dbe`, `D->P`); 2. APT config parsed `\"` as trailing backslash | 1. Dynamic regex-based pattern matching in `patch-bundle.py` across all Vivaldi versions; 2. Installed dedicated standalone runner `/usr/local/bin/vivaldi-sidebar-mod-persist` that detects unpatched vendor files and auto-heals silently; 3. Auto-refreshes `.orig` backups on major updates |
 | **v1.3.0** | In-Panel Permission Prompt System (R1–R4) & Origin Persistence | Web panels failed to access mic, camera, location, or notifications; requests silently dropped by Chromium | Missing embedder `permissionrequest` handler in Chromium `<webview>` GuestView subsystem (`bundle.js` called `e.preventDefault()` and only handled downloads) | Capture-phase event interception on `<webview>`, native in-panel prompt banner (`.edge-permission-banner`) anchored in `section.webpanel-content`, `e.request.allow()` / `e.request.deny()` protocol forwarding, single-decision guard, clean dismissal on close/navigation, origin persistence in `localStorage['vivaldi_sidebar_permissions']`, and global revocation API (`__edgeRevokePermission`, `__edgeClearAllPermissions`). Zero regression to close button and 0.0 MB RAM teardown. |
 | **v1.3.1** | Direct Bundle Permission Bridge & Recursive Webview Observer | Gemini & ChatGPT mic clicks produced no prompt; permission requests silently dropped | 1. Nested `#panels` subtree caused DOM observer to miss dynamically mounted webviews; 2. Native `handleOnPermissionRequest` swallowed `media` requests before mod observer caught them; 3. `e.url` was undefined on Chromium `<webview>` event | Patched `handleOnPermissionRequest` in `bundle.js` with direct synchronous bridge `window.__edgeHandlePermissionRequest(e, this)`, resolved origin from `e.request.url` and React `props.webPanel.url`, added recursive document-level webview observer, and anchored banner under `header.webpanel-header`. |
+| **v1.3.2** | Native Browser Permission Engine & ContentSettings/SitePermissions Full Bridge | Gemini mic dictation, ChatGPT voice, and camera failed or hung indefinitely with NotAllowedError despite UI prompt | Chromium <webview> guest views check `chrome.contentSettings` first. Because web panels lack an address bar, Vivaldi suppresses prompt bubbles, leaving settings in `"ask"` which Chromium treats as denied (`PERMISSION_DENIED_BY_EMBEDDER_CONTEXT`). WebPanel `handleOnPermissionRequest` in `bundle.js` also lacked `case "media": e.request.allow()` fallback. | Built bidirectional bridge between `edge-panel-mod.js`, `chrome.contentSettings`, and `vivaldi.sitePermissions`. Synchronizes stored permissions on browser bootstrap and panel mount. Added `vivaldi.sitePermissions.onPermissionRequest` listener to answer embedder prompts with `respondToPermissionRequest`. Upgraded patch #8 in `patch-bundle.py` with native `case "hid-guard": case "media": e.request.allow();` fallback matching normal tabs. Added Tier 5 test suite (67/67 green). |
 
 ---
 
@@ -298,6 +299,53 @@ This document provides a transparent, low-level technical autopsy of every bug, 
 
 ---
 
+### Iteration 16 (v1.3.2): Native Browser Permission Engine & ContentSettings/SitePermissions Full Bridge
+* **The Goal**: Enable microphone dictation (Gemini, ChatGPT), voice calls, camera access, and device streaming in Vivaldi web panels with zero permission errors and zero regressions.
+* **What Broke**:
+  - Clicking the microphone icon in Google Gemini or ChatGPT in the sidebar produced no microphone stream, or threw `NotAllowedError: Permission denied`.
+  - DOM `<webview>` `permissionrequest` events were not firing for `getUserMedia` requests because Chromium blocked the media request before it reached the DOM layer.
+* **Why It Happened (The Autopsy)**:
+  1. **Dual Permission Gatekeeper Architecture in Chromium & Vivaldi**:
+     - Web permissions are governed by two independent subsystems:
+       1. Chromium's `chrome.contentSettings` (`microphone`, `camera`, `location`, `notifications`).
+       2. Vivaldi's private C++ extension API `vivaldi.sitePermissions` (`setSitePermission`, `onPermissionRequest`, `respondToPermissionRequest`).
+     - By default, unconfigured origins have `setting: "ask"`.
+  2. **The Address-Bar Bubble Suppression Trap**:
+     - In normal tabs, when a site calls `getUserMedia`, Chromium signals Vivaldi to show an address-bar permission bubble anchored to the URL bar.
+     - Web panels have **no address bar**, and panel tabs have `active: false`.
+     - Vivaldi completely suppresses the prompt bubble for web panels.
+     - In Chromium `<webview>` GuestViews, if `contentSettings` is `"ask"` and no embedder UI resolves it, Chromium treats `"ask"` as `PERMISSION_DENIED_BY_EMBEDDER_CONTEXT`, silently rejecting media stream generation without ever firing webview DOM events!
+  3. **Vivaldi's Native Asymmetry in `bundle.js`**:
+     - In normal tabs (`lKe` in `bundle.js`), Vivaldi explicitly has:
+       ```javascript
+       case "hid-guard": case "media": e.request.allow(); break;
+       ```
+     - But in web panels (`pbe` in `bundle.js`), Vivaldi only had `if (e.preventDefault(), "download"===e.permission) Me.Z.doDownload(...)`, leaving `media` completely unhandled and defaulting to denial!
+* **The Engineering Fix**:
+  1. **Bidirectional ContentSettings & SitePermissions Bridge**:
+     - Added `syncBrowserPermission(origin, permission, decision)` to synchronize user decisions to both `chrome.contentSettings` (`microphone`, `camera`, `location`, `notifications`, `clipboard`) and `vivaldi.sitePermissions.setSitePermission`.
+     - Added `syncAllStoredPermissions()` on bootstrap to ensure previously authorized origins (Gemini, ChatGPT, Claude, etc.) are active immediately on browser startup.
+     - Added `syncPanelPermissions(panel)` to synchronize permissions whenever a panel becomes visible.
+  2. **`vivaldi.sitePermissions.onPermissionRequest` Dynamic Listener**:
+     - Intercepts requests for web panel origins directly from Vivaldi's native site permission pipeline.
+     - Displays the sleek `.edge-permission-banner` in the active panel.
+     - On `[ Allow ]`: invokes `vivaldi.sitePermissions.respondToPermissionRequest(requestId, 'allow', devices)`, updates `chrome.contentSettings` and `vivaldi.sitePermissions`, and saves to origin persistence.
+     - On `[ Block ]`: invokes `vivaldi.sitePermissions.respondToPermissionRequest(requestId, 'deny')`, blocks in content settings, and persists.
+  3. **Bundle Patcher Defense-in-Depth Native Fallback (Patch #8)**:
+     - Upgraded patch #8 in `src/patch-bundle.py` so WebPanel's `handleOnPermissionRequest` falls back to:
+       ```javascript
+       switch(e.preventDefault(), e.permission) {
+         case "download": Me.Z.doDownload(e, this.context, this.refWebpanelwebview.current); break;
+         case "hid-guard": case "media": e.request.allow(); break;
+         default: e.request.deny();
+       }
+       ```
+       matching Vivaldi's normal tab handler exactly.
+  4. **Tier 5 Automated Test Suite**:
+     - Added 6 dedicated tests in `tests/test_permissions.js` verifying ContentSettings updates, SitePermissions responses, bootstrap sync, and clean revocation. All 67 tests pass 100% green.
+
+---
+
 ## 🏆 Current Architecture Summary
 
 ```
@@ -333,16 +381,25 @@ Press [Ctrl + Enter] / [Shift + Enter] / [Enter]
 Guest Page Action: Requests Hardware (Mic, Camera, Geolocation, Notifications)
        │
        ▼
-Chromium <webview> fires 'permissionrequest'
+Chromium Checks chrome.contentSettings & vivaldi.sitePermissions
        │
-       ├─► 1. If download: Pass through untouched -> Vivaldi native doDownload
-       ├─► 2. If cached in localStorage['vivaldi_sidebar_permissions']:
-       │         └─► 'allow' -> e.request.allow() | 'block' -> e.request.deny() (0 repeat prompts!)
-       └─► 3. If undecided:
-                 ├─► e.preventDefault() holds Chromium IPC channel open
-                 ├─► Render .edge-permission-banner in section.webpanel-content
-                 ├─► User clicks [ Allow ]: e.request.allow() + persist 'allow' + dismiss
-                 └─► User clicks [ Block ]: e.request.deny() + persist 'block' + dismiss
+       ├─► 1. If cached in localStorage['vivaldi_sidebar_permissions']:
+       │         ├─► Auto-synced to chrome.contentSettings + vivaldi.sitePermissions on bootstrap
+       │         ├─► 'allow' -> Webview & C++ media streams instantly granted (0 repeat prompts!)
+       │         └─► 'block' -> Safely denied
+       │
+       └─► 2. If undecided:
+                 ├─► vivaldi.sitePermissions.onPermissionRequest / DOM permissionrequest intercepted
+                 ├─► Render sleek .edge-permission-banner in active web panel header
+                 ├─► User clicks [ Allow ]:
+                 │     ├─► vivaldi.sitePermissions.respondToPermissionRequest(id, 'allow')
+                 │     ├─► chrome.contentSettings[perm].set({ setting: 'allow' })
+                 │     ├─► vivaldi.sitePermissions.setSitePermission(origin, '*', perm, 'allow')
+                 │     └─► Persist in localStorage + dismiss banner
+                 └─► User clicks [ Block ]:
+                       ├─► vivaldi.sitePermissions.respondToPermissionRequest(id, 'deny')
+                       ├─► chrome.contentSettings[perm].set({ setting: 'block' })
+                       └─► Persist in localStorage + dismiss banner
 
 ────────────────────────────────────────────────────────────────────────
 

@@ -471,6 +471,122 @@
     memoryStore.set(PERM_STORAGE_KEY, data);
   }
 
+  function normalizePermissionName(perm) {
+    if (!perm || typeof perm !== 'string') return '';
+    const p = perm.toLowerCase();
+    if (p === 'media') return 'media';
+    if (p === 'microphone' || p === 'mic' || p === 'media-stream-mic') return 'microphone';
+    if (p === 'camera' || p === 'media-stream-camera') return 'camera';
+    if (p === 'geolocation' || p === 'location') return 'geolocation';
+    if (p === 'notifications' || p === 'notification') return 'notifications';
+    if (p === 'clipboard') return 'clipboard';
+    return p;
+  }
+
+  function syncBrowserPermission(origin, permission, decision) {
+    if (!origin || !isSavableOrigin(origin)) return;
+    const norm = normalizePermissionName(permission);
+    const setting = (decision === 'allow') ? 'allow' : 'block';
+    const vivaldiSetting = (decision === 'allow') ? 'allow' : 'block';
+    const pattern = origin.endsWith('/*') ? origin : (origin + '/*');
+
+    // 1. Sync with chrome.contentSettings
+    if (typeof chrome !== 'undefined' && chrome && chrome.contentSettings) {
+      try {
+        if (!norm || norm === 'media' || norm === 'microphone') {
+          chrome.contentSettings.microphone?.set?.({ primaryPattern: pattern, setting });
+        }
+        if (!norm || norm === 'media' || norm === 'camera') {
+          chrome.contentSettings.camera?.set?.({ primaryPattern: pattern, setting });
+        }
+        if (norm === 'geolocation') {
+          chrome.contentSettings.location?.set?.({ primaryPattern: pattern, setting });
+        }
+        if (norm === 'notifications') {
+          chrome.contentSettings.notifications?.set?.({ primaryPattern: pattern, setting });
+        }
+        if (norm === 'clipboard') {
+          chrome.contentSettings.clipboard?.set?.({ primaryPattern: pattern, setting });
+        }
+      } catch (err) {
+        warn('Error syncing chrome.contentSettings:', err);
+      }
+    }
+
+    // 2. Sync with vivaldi.sitePermissions
+    if (typeof vivaldi !== 'undefined' && vivaldi && vivaldi.sitePermissions && typeof vivaldi.sitePermissions.setSitePermission === 'function') {
+      try {
+        if (!norm || norm === 'media' || norm === 'microphone') {
+          vivaldi.sitePermissions.setSitePermission(origin, '*', 'media-stream-mic', vivaldiSetting);
+        }
+        if (!norm || norm === 'media' || norm === 'camera') {
+          vivaldi.sitePermissions.setSitePermission(origin, '*', 'media-stream-camera', vivaldiSetting);
+        }
+        if (norm === 'geolocation') {
+          vivaldi.sitePermissions.setSitePermission(origin, '*', 'geolocation', vivaldiSetting);
+        }
+        if (norm === 'notifications') {
+          vivaldi.sitePermissions.setSitePermission(origin, '*', 'notifications', vivaldiSetting);
+        }
+        if (norm === 'clipboard') {
+          vivaldi.sitePermissions.setSitePermission(origin, '*', 'clipboard', vivaldiSetting);
+        }
+      } catch (err) {
+        warn('Error syncing vivaldi.sitePermissions:', err);
+      }
+    }
+  }
+
+  function resetBrowserPermissions(origin, permission) {
+    if (!origin) return;
+    const norm = permission ? normalizePermissionName(permission) : null;
+    const pattern = origin.endsWith('/*') ? origin : (origin + '/*');
+
+    if (typeof chrome !== 'undefined' && chrome && chrome.contentSettings) {
+      try {
+        if (!norm || norm === 'media' || norm === 'microphone') {
+          chrome.contentSettings.microphone?.clear?.({ primaryPattern: pattern });
+        }
+        if (!norm || norm === 'media' || norm === 'camera') {
+          chrome.contentSettings.camera?.clear?.({ primaryPattern: pattern });
+        }
+        if (!norm || norm === 'geolocation') {
+          chrome.contentSettings.location?.clear?.({ primaryPattern: pattern });
+        }
+        if (!norm || norm === 'notifications') {
+          chrome.contentSettings.notifications?.clear?.({ primaryPattern: pattern });
+        }
+        if (!norm || norm === 'clipboard') {
+          chrome.contentSettings.clipboard?.clear?.({ primaryPattern: pattern });
+        }
+      } catch (_) {}
+    }
+
+    if (typeof vivaldi !== 'undefined' && vivaldi && vivaldi.sitePermissions && typeof vivaldi.sitePermissions.resetSitePermissions === 'function') {
+      try {
+        vivaldi.sitePermissions.resetSitePermissions(origin);
+      } catch (_) {}
+    }
+  }
+
+  function syncAllStoredPermissions() {
+    try {
+      const all = loadAllPermissions();
+      for (const [origin, perms] of Object.entries(all)) {
+        if (perms && typeof perms === 'object') {
+          for (const [perm, decision] of Object.entries(perms)) {
+            const dec = typeof decision === 'string' ? decision : decision?.decision;
+            if (dec) {
+              syncBrowserPermission(origin, perm, dec);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      warn('syncAllStoredPermissions error:', err);
+    }
+  }
+
   function isSavableOrigin(origin) {
     if (!origin || typeof origin !== 'string') return false;
     if (origin === 'null' || origin === 'about:blank') return false;
@@ -497,6 +613,7 @@
     }
     data[origin][permission] = decision;
     saveAllPermissions(data);
+    syncBrowserPermission(origin, permission, decision);
   }
 
   function revokeStoredPermission(origin, permission) {
@@ -513,9 +630,11 @@
       }
       saveAllPermissions(data);
     }
+    resetBrowserPermissions(origin, permission);
   }
 
   function clearAllStoredPermissions() {
+    const existing = loadAllPermissions();
     const storage = getStorage();
     if (storage) {
       try {
@@ -523,6 +642,9 @@
       } catch (_) {}
     }
     memoryStore.delete(PERM_STORAGE_KEY);
+    for (const origin of Object.keys(existing)) {
+      resetBrowserPermissions(origin);
+    }
   }
 
   // Global APIs for debugging, user revocation, and test suites
@@ -539,7 +661,10 @@
     set: setStoredPermission,
     revoke: revokeStoredPermission,
     clear: clearAllStoredPermissions,
-    getAll: loadAllPermissions
+    getAll: loadAllPermissions,
+    syncBrowser: syncBrowserPermission,
+    resetBrowser: resetBrowserPermissions,
+    syncAll: syncAllStoredPermissions
   };
 
   // Direct React bridge called from bundle.js WebPanel handleOnPermissionRequest
@@ -667,22 +792,30 @@
     if (!panel.__edgePermQueue || panel.__edgePermQueue.length === 0) return;
     const next = panel.__edgePermQueue.shift();
     if (isSavableOrigin(next.origin)) {
-      const cached = getStoredPermission(next.origin, next.permission);
+      const cached = getStoredPermission(next.origin, next.permission) || getStoredPermission(next.origin, 'media');
       if (cached === 'allow') {
         safeRespond(next.request, true);
+        if (next.requestId && typeof vivaldi !== 'undefined' && vivaldi?.sitePermissions?.respondToPermissionRequest) {
+          try { vivaldi.sitePermissions.respondToPermissionRequest(next.requestId, 'allow', next.devices); } catch (_) {}
+        }
+        syncBrowserPermission(next.origin, next.permission, 'allow');
         processNextQueued(panel);
         return;
       }
       if (cached === 'block' || cached === 'deny') {
         safeRespond(next.request, false);
+        if (next.requestId && typeof vivaldi !== 'undefined' && vivaldi?.sitePermissions?.respondToPermissionRequest) {
+          try { vivaldi.sitePermissions.respondToPermissionRequest(next.requestId, 'deny'); } catch (_) {}
+        }
+        syncBrowserPermission(next.origin, next.permission, 'block');
         processNextQueued(panel);
         return;
       }
     }
-    showPrompt(panel, next.request, next.origin, next.permission, next.displayHost);
+    showPrompt(panel, next.request, next.origin, next.permission, next.displayHost, next.requestId, next.devices);
   }
 
-  function showPrompt(panel, request, origin, permission, displayHost) {
+  function showPrompt(panel, request, origin, permission, displayHost, requestId = null, devices = null) {
     ensurePermissionStyles();
 
     const banner = document.createElement('div');
@@ -717,6 +850,8 @@
     let handled = false;
     const activeRecord = {
       request,
+      requestId,
+      devices,
       origin,
       permission,
       banner,
@@ -724,10 +859,19 @@
         if (handled) return;
         handled = true;
         try {
-          if (allow) request.allow();
-          else request.deny();
+          if (request) {
+            if (allow) request.allow();
+            else request.deny();
+          }
         } catch (err) {
           warn('Permission action error:', err);
+        }
+        if (requestId && typeof vivaldi !== 'undefined' && vivaldi?.sitePermissions?.respondToPermissionRequest) {
+          try {
+            vivaldi.sitePermissions.respondToPermissionRequest(requestId, allow ? 'allow' : 'deny', devices);
+          } catch (err) {
+            warn('Vivaldi respondToPermissionRequest error:', err);
+          }
         }
         if (isSavableOrigin(origin)) {
           setStoredPermission(origin, permission, allow ? 'allow' : 'block');
@@ -740,8 +884,13 @@
         if (handled) return;
         handled = true;
         try {
-          request.deny();
+          if (request) request.deny();
         } catch (_) {}
+        if (requestId && typeof vivaldi !== 'undefined' && vivaldi?.sitePermissions?.respondToPermissionRequest) {
+          try {
+            vivaldi.sitePermissions.respondToPermissionRequest(requestId, 'deny');
+          } catch (_) {}
+        }
         banner.remove();
         panel.__edgeActivePermRequest = null;
       }
@@ -799,10 +948,12 @@
       const cached = getStoredPermission(origin, e.permission);
       if (cached === 'allow') {
         safeRespond(e.request, true);
+        syncBrowserPermission(origin, e.permission, 'allow');
         return;
       }
       if (cached === 'block' || cached === 'deny') {
         safeRespond(e.request, false);
+        syncBrowserPermission(origin, e.permission, 'block');
         return;
       }
     }
@@ -828,6 +979,73 @@
         return;
       }
       showPrompt(targetPanel, e.request, origin, e.permission, host);
+    }
+  }
+
+  function handleVivaldiSitePermissionRequest(req) {
+    if (!req || !req.origin) return;
+    const origin = req.origin;
+    const permission = req.permission;
+    const normPerm = normalizePermissionName(permission);
+
+    // If already decided, answer immediately
+    if (isSavableOrigin(origin)) {
+      const cached = getStoredPermission(origin, normPerm) || getStoredPermission(origin, 'media');
+      if (cached === 'allow') {
+        if (typeof vivaldi !== 'undefined' && vivaldi?.sitePermissions?.respondToPermissionRequest) {
+          try { vivaldi.sitePermissions.respondToPermissionRequest(req.requestId, 'allow', req.devices); } catch (_) {}
+        }
+        syncBrowserPermission(origin, normPerm, 'allow');
+        return;
+      }
+      if (cached === 'block' || cached === 'deny') {
+        if (typeof vivaldi !== 'undefined' && vivaldi?.sitePermissions?.respondToPermissionRequest) {
+          try { vivaldi.sitePermissions.respondToPermissionRequest(req.requestId, 'deny'); } catch (_) {}
+        }
+        syncBrowserPermission(origin, normPerm, 'block');
+        return;
+      }
+    }
+
+    const host = extractOriginAndHost(origin, null).host;
+    const targetPanel = document.querySelector('#panels .webpanel.visible') ||
+                        document.querySelector('#panels .panel.visible') ||
+                        getLivePanels().find(p => {
+                          const wv = p.querySelector('webview');
+                          return wv && wv.src && wv.src.includes(origin);
+                        }) ||
+                        getLivePanels()[0] ||
+                        document.querySelector('#panels');
+
+    if (targetPanel) {
+      if (targetPanel.__edgeActivePermRequest) {
+        targetPanel.__edgePermQueue = targetPanel.__edgePermQueue || [];
+        targetPanel.__edgePermQueue.push({
+          request: null,
+          requestId: req.requestId,
+          devices: req.devices,
+          origin,
+          permission: normPerm,
+          displayHost: host,
+          panel: targetPanel
+        });
+        return;
+      }
+      showPrompt(targetPanel, null, origin, normPerm, host, req.requestId, req.devices);
+    }
+  }
+
+  function initVivaldiSitePermissionsListener() {
+    if (typeof vivaldi === 'undefined' || !vivaldi?.sitePermissions?.onPermissionRequest?.addListener) {
+      return;
+    }
+    try {
+      vivaldi.sitePermissions.onPermissionRequest.addListener((req) => {
+        handleVivaldiSitePermissionRequest(req);
+      });
+      log('Vivaldi sitePermissions.onPermissionRequest listener registered.');
+    } catch (err) {
+      warn('Failed to register sitePermissions listener:', err);
     }
   }
 
@@ -866,6 +1084,28 @@
     if (singleWv) hookWebview(singleWv, panel);
   }
 
+  function syncPanelPermissions(panel) {
+    if (!panel) return;
+    try {
+      const wv = panel.querySelector ? panel.querySelector('webview') : null;
+      const { origin } = extractOriginAndHost('', wv);
+      if (origin && isSavableOrigin(origin)) {
+        const all = loadAllPermissions();
+        const entry = all[origin];
+        if (entry && typeof entry === 'object') {
+          for (const [perm, decision] of Object.entries(entry)) {
+            const dec = typeof decision === 'string' ? decision : decision?.decision;
+            if (dec) {
+              syncBrowserPermission(origin, perm, dec);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      warn('syncPanelPermissions error:', err);
+    }
+  }
+
   // ── Panel Visibility Observation ───────────────────────────────────────────
   function handleVisibilityChange(panel) {
     const isVisible = panel.classList.contains('visible');
@@ -873,6 +1113,7 @@
     if (isVisible) {
       setupCloseButton(panel);
       handleReopen(panel);
+      syncPanelPermissions(panel);
     } else {
       log('Panel hidden; session preserved (if multitask) or tab will be destroyed (if X close).');
     }
@@ -989,6 +1230,9 @@
   } catch (_) {}
 
   function bootstrap() {
+    syncAllStoredPermissions();
+    initVivaldiSitePermissionsListener();
+
     if (scanAndInit()) return;
 
     const observer = new MutationObserver((_, obs) => {

@@ -700,12 +700,60 @@ function createVivaldiHarness(options = {}) {
   }
 
   const removedTabs = [];
+  const contentSettingsCalls = {
+    microphone: [],
+    camera: [],
+    location: [],
+    notifications: [],
+    clipboard: []
+  };
+
+  const createSettingHandler = (name) => ({
+    set: (details) => {
+      contentSettingsCalls[name].push({ action: 'set', ...details });
+    },
+    clear: (details) => {
+      contentSettingsCalls[name].push({ action: 'clear', ...details });
+    },
+    get: (details, cb) => {
+      const match = [...contentSettingsCalls[name]].reverse().find(c => c.action === 'set');
+      if (cb) cb({ setting: match ? match.setting : 'ask' });
+    }
+  });
+
+  const sitePermissionsCalls = [];
+  const vivaldiMock = {
+    sitePermissions: {
+      setSitePermission: (origin, secondaryOrigin, permission, setting) => {
+        sitePermissionsCalls.push({ action: 'set', origin, secondaryOrigin, permission, setting });
+      },
+      resetSitePermissions: (origin) => {
+        sitePermissionsCalls.push({ action: 'reset', origin });
+      },
+      respondToPermissionRequest: (requestId, response, devices) => {
+        sitePermissionsCalls.push({ action: 'respond', requestId, response, devices });
+      },
+      onPermissionRequest: {
+        _listeners: [],
+        addListener: function(fn) { this._listeners.push(fn); },
+        _trigger: function(req) { this._listeners.forEach(fn => fn(req)); }
+      }
+    }
+  };
+
   const chromeMock = {
     tabs: {
       remove: (tabId, cb) => {
         removedTabs.push(tabId);
         if (cb) setTimeout(cb, 0);
       }
+    },
+    contentSettings: {
+      microphone: createSettingHandler('microphone'),
+      camera: createSettingHandler('camera'),
+      location: createSettingHandler('location'),
+      notifications: createSettingHandler('notifications'),
+      clipboard: createSettingHandler('clipboard')
     },
     runtime: { lastError: null }
   };
@@ -715,6 +763,7 @@ function createVivaldiHarness(options = {}) {
     document: doc,
     localStorage,
     chrome: chromeMock,
+    vivaldi: vivaldiMock,
     MutationObserver: MockMutationObserver,
     PointerEvent: class extends MockEvent {},
     KeyboardEvent: class extends MockEvent {},
@@ -756,7 +805,10 @@ function createVivaldiHarness(options = {}) {
     contentSection,
     localStorage,
     sandbox,
-    removedTabs
+    removedTabs,
+    contentSettingsCalls,
+    sitePermissionsCalls,
+    vivaldiMock
   };
 }
 
@@ -1485,6 +1537,98 @@ runTest('Tier 4', 'Real-World Scenarios', '12.5 Multi-panel switching with indep
 });
 
 // =============================================================================
+// SECTION 6B: TIER 5 - CONTENT SETTINGS & SITE PERMISSIONS BRIDGE TESTS
+// =============================================================================
+
+runTest('Tier 5', 'ContentSettings & SitePermissions Bridge', '13.1 User clicks Allow: chrome.contentSettings.microphone & camera updated to allow', () => {
+  const h = createVivaldiHarness();
+  const { request } = h.webview.dispatchPermissionRequest({ permission: 'media', url: 'https://gemini.google.com/app' });
+
+  const banner = findPermissionBanner(h.panel);
+  assert(banner !== null, 'Banner must be visible');
+  findAllowButton(banner).click();
+
+  assert.strictEqual(request.allowed, true, 'request.allow() called');
+  const micSets = h.contentSettingsCalls.microphone.filter(c => c.action === 'set');
+  assert(micSets.length > 0, 'chrome.contentSettings.microphone.set must be called');
+  assert.strictEqual(micSets[0].setting, 'allow');
+  assert.strictEqual(micSets[0].primaryPattern, 'https://gemini.google.com/*');
+});
+
+runTest('Tier 5', 'ContentSettings & SitePermissions Bridge', '13.2 User clicks Block: chrome.contentSettings.microphone & camera updated to block', () => {
+  const h = createVivaldiHarness();
+  const { request } = h.webview.dispatchPermissionRequest({ permission: 'media', url: 'https://gemini.google.com/app' });
+
+  const banner = findPermissionBanner(h.panel);
+  findBlockButton(banner).click();
+
+  assert.strictEqual(request.denied, true, 'request.deny() called');
+  const micSets = h.contentSettingsCalls.microphone.filter(c => c.action === 'set');
+  assert(micSets.length > 0, 'chrome.contentSettings.microphone.set must be called');
+  assert.strictEqual(micSets[0].setting, 'block');
+});
+
+runTest('Tier 5', 'ContentSettings & SitePermissions Bridge', '13.3 vivaldi.sitePermissions.setSitePermission called for media-stream-mic and media-stream-camera', () => {
+  const h = createVivaldiHarness();
+  h.webview.dispatchPermissionRequest({ permission: 'media', url: 'https://gemini.google.com/app' });
+
+  const banner = findPermissionBanner(h.panel);
+  findAllowButton(banner).click();
+
+  const siteSets = h.sitePermissionsCalls.filter(c => c.action === 'set');
+  assert(siteSets.some(c => c.permission === 'media-stream-mic' && c.setting === 'allow'), 'media-stream-mic must be set');
+  assert(siteSets.some(c => c.permission === 'media-stream-camera' && c.setting === 'allow'), 'media-stream-camera must be set');
+});
+
+runTest('Tier 5', 'ContentSettings & SitePermissions Bridge', '13.4 vivaldi.sitePermissions.onPermissionRequest listener responds with allow and syncs settings', () => {
+  const h = createVivaldiHarness();
+  assert(h.vivaldiMock.sitePermissions.onPermissionRequest._listeners.length > 0, 'Listener registered');
+
+  h.vivaldiMock.sitePermissions.onPermissionRequest._trigger({
+    requestId: 42,
+    origin: 'https://gemini.google.com',
+    permission: 'media-stream-mic',
+    devices: ['mic1']
+  });
+
+  const banner = findPermissionBanner(h.panel);
+  assert(banner !== null, 'Banner must display for sitePermissions request');
+  findAllowButton(banner).click();
+
+  const responds = h.sitePermissionsCalls.filter(c => c.action === 'respond');
+  assert(responds.some(c => c.requestId === 42 && c.response === 'allow'), 'respondToPermissionRequest must be called with allow');
+});
+
+runTest('Tier 5', 'ContentSettings & SitePermissions Bridge', '13.5 Permissions sync on panel reopen and initialization', () => {
+  const initialStorage = {
+    vivaldi_sidebar_permissions: {
+      'https://gemini.google.com': { media: 'allow' }
+    }
+  };
+  const h = createVivaldiHarness({ initialStorage });
+
+  const micSets = h.contentSettingsCalls.microphone.filter(c => c.action === 'set');
+  assert(micSets.length > 0, 'Bootstrap must auto-sync stored permissions to chrome.contentSettings');
+  assert.strictEqual(micSets[0].setting, 'allow');
+});
+
+runTest('Tier 5', 'ContentSettings & SitePermissions Bridge', '13.6 Revocation clears both chrome.contentSettings and vivaldi.sitePermissions', () => {
+  const initialStorage = {
+    vivaldi_sidebar_permissions: {
+      'https://gemini.google.com': { media: 'allow' }
+    }
+  };
+  const h = createVivaldiHarness({ initialStorage });
+
+  h.sandbox.__edgeRevokePermission('https://gemini.google.com', 'media');
+
+  const micClears = h.contentSettingsCalls.microphone.filter(c => c.action === 'clear');
+  assert(micClears.length > 0, 'chrome.contentSettings.microphone.clear must be called on revocation');
+  const siteResets = h.sitePermissionsCalls.filter(c => c.action === 'reset');
+  assert(siteResets.some(c => c.origin === 'https://gemini.google.com'), 'resetSitePermissions must be called on revocation');
+});
+
+// =============================================================================
 // SECTION 7: TEST RESULTS AGGREGATION & REPORTING
 // =============================================================================
 
@@ -1534,7 +1678,7 @@ function printResults() {
     console.log('   Expected during initial test suite creation prior to feature implementation.');
     process.exit(1);
   } else {
-    console.log('🎉 ALL 4 TIERS PASSED (100% GREEN)! Permission system verified.');
+    console.log('🎉 ALL 5 TIERS PASSED (100% GREEN)! Permission system verified.');
     process.exit(0);
   }
 }

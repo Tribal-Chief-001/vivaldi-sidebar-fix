@@ -182,15 +182,20 @@ def patch_bundle(bundle_path):
     else:
         print(" -> Note: Rge componentDidUpdate pattern not matched")
 
-    # 8. Bridge Web Panel permission requests to edge-panel-mod
-    target_perm = 'handleOnPermissionRequest=e=>{if(e.preventDefault(),"download"===e.permission)'
-    new_perm = 'handleOnPermissionRequest=e=>{if(window.__edgeHandlePermissionRequest&&window.__edgeHandlePermissionRequest(e,this))return;if(e.preventDefault(),"download"===e.permission)'
-    if target_perm in content:
-        content = content.replace(target_perm, new_perm, 1)
-        print(" -> Patched WebPanel handleOnPermissionRequest to bridge with edge-panel-mod")
+    # 8. Bridge Web Panel permission requests to edge-panel-mod with native media fallback
+    full_target_v1 = 'handleOnPermissionRequest=e=>{if(window.__edgeHandlePermissionRequest&&window.__edgeHandlePermissionRequest(e,this))return;if(e.preventDefault(),"download"===e.permission)Me.Z.doDownload(e,this.context,this.refWebpanelwebview.current)}'
+    full_target_orig = 'handleOnPermissionRequest=e=>{if(e.preventDefault(),"download"===e.permission)Me.Z.doDownload(e,this.context,this.refWebpanelwebview.current)}'
+    new_perm = 'handleOnPermissionRequest=e=>{if(window.__edgeHandlePermissionRequest&&window.__edgeHandlePermissionRequest(e,this))return;switch(e.preventDefault(),e.permission){case"download":Me.Z.doDownload(e,this.context,this.refWebpanelwebview.current);break;case"hid-guard":case"media":e.request.allow();break;default:e.request.deny()}}'
+    if new_perm in content:
+        print(" -> WebPanel handleOnPermissionRequest already bridged with native media fallback")
+    elif full_target_v1 in content:
+        content = content.replace(full_target_v1, new_perm, 1)
+        print(" -> Upgraded WebPanel handleOnPermissionRequest to native media fallback")
         changes += 1
-    elif '__edgeHandlePermissionRequest' in content:
-        print(" -> WebPanel handleOnPermissionRequest already bridged")
+    elif full_target_orig in content:
+        content = content.replace(full_target_orig, new_perm, 1)
+        print(" -> Patched WebPanel handleOnPermissionRequest with native media fallback")
+        changes += 1
     else:
         print(" -> Note: WebPanel handleOnPermissionRequest pattern not matched")
 
