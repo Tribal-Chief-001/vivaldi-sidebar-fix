@@ -64,16 +64,27 @@ if [ -f "$VIVALDI_RESOURCE_DIR/bundle.js.orig" ]; then
     rm -f "$VIVALDI_RESOURCE_DIR/bundle.js.orig"
 fi
 
-# 4. Remove APT persistence hook
-APT_HOOK_FILE="/etc/apt/apt.conf.d/99-vivaldi-mod-persistence"
-if [ -f "$APT_HOOK_FILE" ]; then
-    echo "[+] Removing APT persistence hook..."
-    rm -f "$APT_HOOK_FILE"
-fi
-PERSIST_BIN="/usr/local/bin/vivaldi-sidebar-mod-persist"
-if [ -f "$PERSIST_BIN" ]; then
-    echo "[+] Removing persistence runner binary..."
-    rm -f "$PERSIST_BIN"
+# 4. Remove Triple-Lock persistence hooks & systemd units
+if [ "$EUID" -eq 0 ]; then
+    echo "[+] Removing persistence hooks and services..."
+
+    # Systemd units
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now vivaldi-sidebar-mod-persist.path >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/vivaldi-sidebar-mod-persist.path"
+        rm -f "/etc/systemd/system/vivaldi-sidebar-mod-persist.service"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    # DPKG hook
+    rm -f "/etc/dpkg/dpkg.cfg.d/99-vivaldi-mod-persistence"
+
+    # APT hook
+    rm -f "/etc/apt/apt.conf.d/99-vivaldi-mod-persistence"
+
+    # Persistence binary & shared assets
+    rm -f "/usr/local/bin/vivaldi-sidebar-mod-persist"
+    rm -rf "/usr/local/share/vivaldi-sidebar-mod"
 fi
 
 echo ""

@@ -72,22 +72,79 @@ if [ -f "$VIVALDI_RESOURCE_DIR/bundle.js" ]; then
     python3 "$SCRIPT_DIR/src/patch-bundle.py" "$VIVALDI_RESOURCE_DIR/bundle.js"
 fi
 
-# Step 5: Install APT Post-Invoke hook for update persistence on Debian/Ubuntu/Mint
-APT_HOOK_FILE="/etc/apt/apt.conf.d/99-vivaldi-mod-persistence"
+# Step 5: Install Triple-Lock Update Persistence (Systemd inotify, DPKG, and APT hooks)
+SYSTEM_SHARE_DIR="/usr/local/share/vivaldi-sidebar-mod"
 PERSIST_BIN="/usr/local/bin/vivaldi-sidebar-mod-persist"
-if [ -d "/etc/apt/apt.conf.d" ] && [ "$EUID" -eq 0 ]; then
+APT_HOOK_FILE="/etc/apt/apt.conf.d/99-vivaldi-mod-persistence"
+DPKG_HOOK_FILE="/etc/dpkg/dpkg.cfg.d/99-vivaldi-mod-persistence"
+SYSTEMD_PATH_FILE="/etc/systemd/system/vivaldi-sidebar-mod-persist.path"
+SYSTEMD_SERVICE_FILE="/etc/systemd/system/vivaldi-sidebar-mod-persist.service"
+
+if [ "$EUID" -eq 0 ]; then
+    echo "[+] Deploying self-contained mod assets to $SYSTEM_SHARE_DIR..."
+    mkdir -p "$SYSTEM_SHARE_DIR/src"
+    cp -f "$SCRIPT_DIR/src/edge-panel-mod.js" "$SYSTEM_SHARE_DIR/src/edge-panel-mod.js"
+    cp -f "$SCRIPT_DIR/src/patch-bundle.py" "$SYSTEM_SHARE_DIR/src/patch-bundle.py"
+    chmod 644 "$SYSTEM_SHARE_DIR/src/"*
+
     echo "[+] Installing persistence runner to $PERSIST_BIN..."
     cp -f "$SCRIPT_DIR/src/vivaldi-sidebar-mod-persist" "$PERSIST_BIN"
-    sed -i "s|INSTALL_DIR=.*|INSTALL_DIR=\"$SCRIPT_DIR\"|" "$PERSIST_BIN"
     sed -i "s|VIVALDI_DIR=.*|VIVALDI_DIR=\"$VIVALDI_RESOURCE_DIR\"|" "$PERSIST_BIN"
     chmod 755 "$PERSIST_BIN"
 
-    echo "[+] Setting up clean APT persistence hook at $APT_HOOK_FILE..."
-    cat << 'HOOK_EOF' > "$APT_HOOK_FILE"
+    # Layer 1: APT Post-Invoke hook
+    if [ -d "/etc/apt/apt.conf.d" ]; then
+        echo "[+] Setting up APT persistence hook at $APT_HOOK_FILE..."
+        cat << 'HOOK_EOF' > "$APT_HOOK_FILE"
 // Re-apply Vivaldi Edge Panels mod automatically after Vivaldi package updates
 DPkg::Post-Invoke {"/usr/local/bin/vivaldi-sidebar-mod-persist >/dev/null 2>&1 || true";};
 HOOK_EOF
-    chmod 644 "$APT_HOOK_FILE"
+        chmod 644 "$APT_HOOK_FILE"
+    fi
+
+    # Layer 2: DPKG Post-Invoke hook (catches dpkg directly, Mint Update Manager, PackageKit)
+    if [ -d "/etc/dpkg/dpkg.cfg.d" ]; then
+        echo "[+] Setting up DPKG persistence hook at $DPKG_HOOK_FILE..."
+        cat << 'DPKG_EOF' > "$DPKG_HOOK_FILE"
+# Trigger automated Vivaldi Sidebar mod re-patching after any package transaction
+post-invoke=/usr/local/bin/vivaldi-sidebar-mod-persist
+DPKG_EOF
+        chmod 644 "$DPKG_HOOK_FILE"
+    fi
+
+    # Layer 3: Systemd Inotify Path Watcher (kernel-level trigger on window.html modification)
+    if [ -d "/etc/systemd/system" ] && command -v systemctl >/dev/null 2>&1; then
+        echo "[+] Setting up Systemd Inotify Path Watcher at $SYSTEMD_PATH_FILE..."
+        cat << SYSTEMD_EOF > "$SYSTEMD_PATH_FILE"
+[Unit]
+Description=Watch Vivaldi window.html for package manager updates
+After=local-fs.target
+
+[Path]
+PathModified=$VIVALDI_RESOURCE_DIR/window.html
+Unit=vivaldi-sidebar-mod-persist.service
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_EOF
+        chmod 644 "$SYSTEMD_PATH_FILE"
+
+        cat << 'SERVICE_EOF' > "$SYSTEMD_SERVICE_FILE"
+[Unit]
+Description=Auto re-patch Vivaldi Sidebar Mod after updates
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vivaldi-sidebar-mod-persist
+StandardOutput=null
+StandardError=null
+SERVICE_EOF
+        chmod 644 "$SYSTEMD_SERVICE_FILE"
+
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable --now vivaldi-sidebar-mod-persist.path >/dev/null 2>&1 || true
+        echo "[✓] Systemd inotify watcher active and running"
+    fi
 fi
 
 echo ""
@@ -96,8 +153,11 @@ echo "[✓] Installation complete!"
 echo "    - Dedicated close button (X) active"
 echo "    - 0 MB instant RAM reclamation via chrome.tabs.remove() active"
 echo "    - 88% max panel width slider enabled"
-if [ -d "/etc/apt/apt.conf.d" ]; then
-    echo "    - Silent APT update persistence configured"
+if [ "$EUID" -eq 0 ]; then
+    echo "    - Triple-Lock update persistence active:"
+    echo "      * Systemd Inotify Path Watcher (Kernel-level)"
+    echo "      * DPKG Post-Invoke Hook (Low-level package manager)"
+    echo "      * APT Post-Invoke Hook (Package manager)"
 fi
 echo ""
 echo "Restart Vivaldi to apply changes:"

@@ -109,7 +109,7 @@ def patch_bundle(bundle_path):
         print(" -> Note: 65vw pattern not matched")
 
     # 3. Enable native Vivaldi Close (X) button even with Floating & Auto-Close
-    pat_close = r"shouldShowCloseButton=e=>this\.props\.prefValues\[([A-Za-z0-9_$]+)\.kPanelsShowCloseButton\]&&!\(\(si\.ZP\.getSeparateFloating\(e,this\.winId\)\|\|this\.props\.prefValues\[\1\.kPanelsAsOverlayEnabled\]\)&&this\.props\.prefValues\[\1\.kPanelsAsOverlayAutoClose\]\);"
+    pat_close = r"shouldShowCloseButton=e=>this\.props\.prefValues\[([A-Za-z0-9_$]+)\.kPanelsShowCloseButton\]&&!\(\(([A-Za-z0-9_$]+)\.ZP\.getSeparateFloating\(e,this\.winId\)\|\|this\.props\.prefValues\[\1\.kPanelsAsOverlayEnabled\]\)&&this\.props\.prefValues\[\1\.kPanelsAsOverlayAutoClose\]\);"
     m_close = re.search(pat_close, content)
     if m_close:
         old_close = m_close.group(0)
@@ -125,22 +125,23 @@ def patch_bundle(bundle_path):
     else:
         print(" -> Note: shouldShowCloseButton pattern not matched")
 
-    # 4. Patch Rge (WebPanel) close button to trigger __edgeCloseWebPanel or native home() + closePanel
-    pat_rge = r'this\.props\.showCloseButton&&\(0,([A-Za-z0-9_$]+)\.jsx\)\("button",\{className:"close transparent",onClick:\(\)=>ii\.Z\.closePanel\(this\.winId\),title:\(0,([A-Za-z0-9_$]+)\.Z\)\("Close Panel"\),children:([A-Za-z0-9_$]+)\}\)'
+    # 4. Patch Rge/WebPanel close button to trigger __edgeCloseWebPanel or native home() + closePanel
+    pat_rge = r'this\.props\.showCloseButton&&\(0,([A-Za-z0-9_$]+)\.jsx\)\("button",\{className:"close transparent",onClick:\(\)=>([A-Za-z0-9_$]+)\.Z\.closePanel\(this\.winId\),title:\(0,([A-Za-z0-9_$]+)\.Z\)\("Close Panel"\),children:([A-Za-z0-9_$]+)\}\)'
     m_rge = re.search(pat_rge, content)
     if m_rge:
         old_rge = m_rge.group(0)
         jsx_var = m_rge.group(1)
-        t_var = m_rge.group(2)
-        icon_var = m_rge.group(3)
-        new_rge = f'this.props.showCloseButton&&(0,{jsx_var}.jsx)("button",{{className:"close transparent",onClick:()=>{{(window.__edgeCloseWebPanel?window.__edgeCloseWebPanel(this):(this.home(),ii.Z.closePanel(this.winId)))}},title:(0,{t_var}.Z)("Close Panel"),children:{icon_var}}})'
+        close_pkg = m_rge.group(2)
+        t_var = m_rge.group(3)
+        icon_var = m_rge.group(4)
+        new_rge = f'this.props.showCloseButton&&(0,{jsx_var}.jsx)("button",{{className:"close transparent",onClick:()=>{{(window.__edgeCloseWebPanel?window.__edgeCloseWebPanel(this):(this.home(),{close_pkg}.Z.closePanel(this.winId)))}},title:(0,{t_var}.Z)("Close Panel"),children:{icon_var}}})'
         content = content.replace(old_rge, new_rge, 1)
-        print(" -> Connected native Rge close button to Edge reset & discard handler")
+        print(" -> Connected native WebPanel close button to Edge reset & discard handler")
         changes += 1
     elif '__edgeCloseWebPanel' in content:
-        print(" -> Native Rge close button already connected to Edge reset handler")
+        print(" -> Native WebPanel close button already connected to Edge reset handler")
     else:
-        print(" -> Note: Rge close button pattern not matched")
+        print(" -> Note: WebPanel close button pattern not matched")
 
     # 5. Patch text editing shortcut passthrough set (f) to include Ctrl+Enter / Meta+Enter
     target_f = 'let f=new Set(["left","right","shift+left","shift+right","shift+up","shift+down","enter","shift+enter"]);f=new Set([...f,"ctrl+a","ctrl+z","ctrl+y","ctrl+u","ctrl+left","ctrl+right","ctrl+backspace","ctrl+delete","ctrl+home","ctrl+end","ctrl+shift+left","ctrl+shift+right","shift+home","shift+end"]);'
@@ -154,14 +155,21 @@ def patch_bundle(bundle_path):
     else:
         print(" -> Note: Shortcut passthrough set pattern not matched")
 
-    # 6. Patch Web Panel webview focus check in handleShortcut
-    pat_shortcut = r'"WEBVIEW"===m\?l\.Z\.windowPrivate\.getFocusedElementInfo\(h\)\.then\(\(\(\{tagName:n,editable:i,role:s\}\)=>\{if\(!i\|\|([A-Za-z0-9_$]+)\(r\)\)\{(?:const i="SELECT"===n,[A-Za-z0-9_$]+="SPAN"===n&&"spinbutton"===s;\(!i&&![A-Za-z0-9_$]+\|\|i&&\1\(r\)\)&&v\(e,h,O\(r\),t\))\}\}\)\):v\(e,h,O\(r\),t\)'
-    m_shortcut = re.search(pat_shortcut, content)
-    if m_shortcut:
-        old_shortcut = m_shortcut.group(0)
-        func_name = m_shortcut.group(1)
-        inner_call = old_shortcut[len('"WEBVIEW"===m?'):-len(':v(e,h,O(r),t)')]
-        new_shortcut = f'"WEBVIEW"===m?(p?.closest?.("#panels")?{func_name}(r)&&v(e,h,O(r),t):{inner_call}):v(e,h,O(r),t)'
+    # 6. Patch Web Panel webview focus check in handleShortcut (Supports both 8.2 and 8.3+)
+    pat_shortcut = r'"WEBVIEW"===([A-Za-z0-9_$]+)\?([A-Za-z0-9_$]+)\.Z\.windowPrivate\.getFocusedElementInfo\(([A-Za-z0-9_$]+)\)\.then\([({]{1,4}.+?\){1,4}:v\(([A-Za-z0-9_$]+),\3,O\(r\),([A-Za-z0-9_$]+)\)'
+    m_sc = re.search(pat_shortcut, content)
+
+    if m_sc:
+        old_shortcut = m_sc.group(0)
+        tag_var = m_sc.group(1)
+        p_var = m_sc.group(3)
+        e_var = m_sc.group(4)
+        t_var = m_sc.group(5)
+        m_func = re.search(r'if\(!i\|\|([A-Za-z0-9_$]+)\(r\)\)', old_shortcut)
+        func_name = m_func.group(1) if m_func else "S"
+        inner_call = old_shortcut[len(f'"WEBVIEW"==={tag_var}?'):-len(f':v({e_var},{p_var},O(r),{t_var})')]
+        check_clause = f'{p_var}?.closest?.("#panels")' if p_var == 'p' else f'({p_var}?.closest?.("#panels")||p?.closest?.("#panels"))'
+        new_shortcut = f'"WEBVIEW"==={tag_var}?({check_clause}?{func_name}(r)&&v({e_var},{p_var},O(r),{t_var}):{inner_call}):v({e_var},{p_var},O(r),{t_var})'
         content = content.replace(old_shortcut, new_shortcut, 1)
         print(" -> Patched web panel webview shortcut dispatcher in handleShortcut")
         changes += 1
@@ -170,17 +178,25 @@ def patch_bundle(bundle_path):
     else:
         print(" -> Note: Web panel webview shortcut pattern not matched")
 
-    # 7. Patch Rge componentDidUpdate to trigger this._createRelatedTab() & this.home() on reopen
-    target_cdu = 'e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
-    new_cdu = '(!e.isVisible&&this.props.isVisible&&window.__edgeShouldReset?.(this.props.webPanel?.id)&&(this._createRelatedTab(),this.home())),e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
-    if target_cdu in content:
-        content = content.replace(target_cdu, new_cdu, 1)
-        print(" -> Patched Rge componentDidUpdate for instant home reset & tab recreation on reopen")
+    # 7. Patch WebPanel componentDidUpdate to trigger this._createRelatedTab() & this.home() on reopen
+    pat_cdu = r'e\.isVisible===this\.props\.isVisible&&e\.focusContent===this\.props\.focusContent\|\|this\.#[A-Za-z0-9_$]+\(i\)'
+    m_cdu = re.search(pat_cdu, content)
+    target_cdu_literal = 'e.isVisible===this.props.isVisible&&e.focusContent===this.props.focusContent||this.#wn(i)'
+    if m_cdu:
+        old_cdu = m_cdu.group(0)
+        new_cdu = '(!e.isVisible&&this.props.isVisible&&window.__edgeShouldReset?.(this.props.webPanel?.id)&&(this._createRelatedTab(),this.home())),' + old_cdu
+        content = content.replace(old_cdu, new_cdu, 1)
+        print(" -> Patched WebPanel componentDidUpdate for instant home reset & tab recreation on reopen")
+        changes += 1
+    elif target_cdu_literal in content:
+        new_cdu = '(!e.isVisible&&this.props.isVisible&&window.__edgeShouldReset?.(this.props.webPanel?.id)&&(this._createRelatedTab(),this.home())),' + target_cdu_literal
+        content = content.replace(target_cdu_literal, new_cdu, 1)
+        print(" -> Patched WebPanel componentDidUpdate for instant home reset & tab recreation on reopen")
         changes += 1
     elif '__edgeShouldReset' in content:
-        print(" -> Rge componentDidUpdate already patched for home reset")
+        print(" -> WebPanel componentDidUpdate already patched for home reset")
     else:
-        print(" -> Note: Rge componentDidUpdate pattern not matched")
+        print(" -> Note: WebPanel componentDidUpdate pattern not matched")
 
     # 8. Bridge Web Panel permission requests to edge-panel-mod with native media fallback
     full_target_v1 = 'handleOnPermissionRequest=e=>{if(window.__edgeHandlePermissionRequest&&window.__edgeHandlePermissionRequest(e,this))return;if(e.preventDefault(),"download"===e.permission)Me.Z.doDownload(e,this.context,this.refWebpanelwebview.current)}'
